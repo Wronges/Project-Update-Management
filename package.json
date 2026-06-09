@@ -1,0 +1,24 @@
+{
+  "name": "project-update-management",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c green,blue \"npm run dev -w @pum/api\" \"npm run dev -w @pum/web\"",
+    "build": "npm run build -w @pum/shared && npm run build -w @pum/api && npm run build -w @pum/web",
+    "typecheck": "npm run build -w @pum/shared && npm run typecheck -w @pum/api && npm run typecheck -w @pum/web",
+    "test": "npm run build -w @pum/shared && npm run test -w @pum/api",
+    "start": "npm run start -w @pum/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
