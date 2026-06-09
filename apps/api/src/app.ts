@@ -40,20 +40,29 @@ export async function buildApp() {
     status: "ok",
     mutationsEnabled: Boolean(appConfig.adminToken)
   }));
-  app.get("/api/dashboard", async () => ({
-    summary: projects.summary(),
-    projects: projects.list(),
-    recentTasks: tasks.list(20)
-  }));
+  app.get("/api/dashboard", async () => {
+    await projects.refreshRuntimeStatuses();
+    return {
+      summary: projects.summary(),
+      projects: projects.list(),
+      recentTasks: tasks.list(20)
+    };
+  });
   app.get("/api/server-status", async () => collectServerStatus());
-  app.get("/api/projects", async () => projects.list());
-  app.get<{ Params: { id: string } }>("/api/projects/:id", async (request) => ({
-    project: projects.get(request.params.id),
-    history: tasks
-      .list(200)
-      .filter((task) => task.projectId === request.params.id)
-      .slice(0, 20)
-  }));
+  app.get("/api/projects", async () => {
+    await projects.refreshRuntimeStatuses();
+    return projects.list();
+  });
+  app.get<{ Params: { id: string } }>("/api/projects/:id", async (request) => {
+    await projects.refreshRuntimeStatuses();
+    return {
+      project: projects.get(request.params.id),
+      history: tasks
+        .list(200)
+        .filter((task) => task.projectId === request.params.id)
+        .slice(0, 20)
+    };
+  });
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/check",
     async (request, reply) => {

@@ -22,6 +22,19 @@ export class ProjectService {
     await Promise.all(this.projects.map((project) => this.refreshRuntime(project)));
   }
 
+  async refreshRuntimeStatuses(): Promise<void> {
+    const runtimeStatuses = await this.docker.runtimeStatuses();
+
+    for (const project of this.projects) {
+      if (this.locks.has(project.id)) continue;
+      const current = this.getStatus(project);
+      this.statuses.set(project.id, {
+        ...current,
+        runtimeStatus: runtimeStatuses.get(project.containerName) ?? "missing"
+      });
+    }
+  }
+
   list(): ProjectStatus[] {
     return this.projects.map((project) => this.getStatus(project));
   }

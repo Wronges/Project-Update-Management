@@ -11,6 +11,27 @@ export interface CommandResult {
 }
 
 export class DockerAdapter {
+  async runtimeStatuses(): Promise<Map<string, RuntimeStatus>> {
+    const result = await this.run("docker", [
+      "ps",
+      "-a",
+      "--format",
+      "{{.Names}}|{{.State}}"
+    ]);
+    const statuses = new Map<string, RuntimeStatus>();
+
+    for (const line of result.stdout.split(/\r?\n/)) {
+      if (!line) continue;
+      const separator = line.lastIndexOf("|");
+      if (separator < 0) continue;
+      const name = line.slice(0, separator);
+      const state = line.slice(separator + 1);
+      statuses.set(name, state === "running" ? "running" : "stopped");
+    }
+
+    return statuses;
+  }
+
   async containerImageId(containerName: string): Promise<string | null> {
     try {
       const result = await this.run("docker", [
@@ -90,4 +111,3 @@ export class DockerAdapter {
     };
   }
 }
-
