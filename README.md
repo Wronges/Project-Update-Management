@@ -45,6 +45,8 @@ docker compose -f docker-compose.production.yml up -d --build
 
 生产容器只读挂载宿主机 `/opt`，用于读取各项目的 Compose 配置；Docker 操作通过 `/var/run/docker.sock` 执行。网页写操作还需要 `PUM_ADMIN_TOKEN`。
 
+公网接入示例位于 `deploy/nginx/`。管理页面应至少启用 HTTPS 和 Basic Auth，应用层写操作仍由 `PUM_ADMIN_TOKEN` 二次保护。
+
 ## 更新策略
 
 - `image`：允许平台拉取镜像并强制重建 Compose 服务。
