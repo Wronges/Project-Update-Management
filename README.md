@@ -41,9 +41,9 @@ $token = [Convert]::ToHexString((1..32 | ForEach-Object { Get-Random -Maximum 25
 docker compose -f docker-compose.production.yml up -d --build
 ```
 
-服务默认只映射到 `127.0.0.1:8787`。公网访问必须通过反向代理，并建议在反向代理层继续启用登录认证。
+服务默认只监听 `127.0.0.1:8787`。公网访问必须通过反向代理，并建议在反向代理层继续启用登录认证。
 
-生产容器只读挂载宿主机 `/opt`，用于读取各项目的 Compose 配置；Docker 操作通过 `/var/run/docker.sock` 执行。网页写操作还需要 `PUM_ADMIN_TOKEN`。
+生产容器只读挂载宿主机 `/opt`，用于读取各项目的 Compose 配置；Docker 操作通过 `/var/run/docker.sock` 执行。容器使用 host 网络但应用仅监听 `127.0.0.1:8787`，以便健康检查访问同样仅绑定宿主机回环地址的服务。网页写操作还需要 `PUM_ADMIN_TOKEN`。
 
 公网接入示例位于 `deploy/nginx/`。管理页面应至少启用 HTTPS 和 Basic Auth，应用层写操作仍由 `PUM_ADMIN_TOKEN` 二次保护。
 
