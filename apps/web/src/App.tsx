@@ -80,10 +80,21 @@ export function App() {
   });
 
   async function runAction(projectId: string, action: "check" | "update") {
+    let token = window.sessionStorage.getItem("pum-admin-token") ?? "";
+    if (!token) {
+      token = window.prompt("请输入管理员令牌")?.trim() ?? "";
+      if (!token) return;
+      window.sessionStorage.setItem("pum-admin-token", token);
+    }
     setActionId(projectId);
     try {
       const response = await fetch(`/api/projects/${projectId}/${action}`, {
-        method: "POST"
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-pum-token": token
+        },
+        body: "{}"
       });
       if (!response.ok) {
         const payload = await response.json();
@@ -223,7 +234,11 @@ export function App() {
                           检查
                         </button>
                         <button
-                          disabled={actionId === project.id}
+                          disabled={
+                            actionId === project.id ||
+                            project.updateStrategy === "manual"
+                          }
+                          title={project.manualUpdateNote}
                           onClick={() => void runAction(project.id, "update")}
                         >
                           {actionId === project.id ? "执行中" : "更新"}
@@ -290,6 +305,12 @@ export function App() {
           </DetailRow>
           <DetailRow label="部署目录"><code>{selected.composeDirectory}</code></DetailRow>
           <DetailRow label="Compose 服务"><code>{selected.composeService}</code></DetailRow>
+          <DetailRow label="更新策略">
+            <code>{selected.updateStrategy === "image" ? "镜像自动更新" : "人工合并更新"}</code>
+          </DetailRow>
+          {selected.manualUpdateNote && (
+            <DetailRow label="更新说明">{selected.manualUpdateNote}</DetailRow>
+          )}
           <div className="detail-actions">
             <button
               className="button secondary"
@@ -300,6 +321,8 @@ export function App() {
             </button>
             <button
               className="button primary"
+              disabled={selected.updateStrategy === "manual"}
+              title={selected.manualUpdateNote}
               onClick={() => void runAction(selected.id, "update")}
             >
               <Boxes size={16} />
@@ -399,4 +422,3 @@ function formatTime(value: string): string {
     minute: "2-digit"
   }).format(new Date(value));
 }
-

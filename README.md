@@ -26,3 +26,26 @@ npm.cmd run dev
 
 服务应部署在 Docker 主机本机，或由后续 Agent 部署在每台被管理服务器上。API 不接受任意 Shell 命令，只执行项目清单中已登记的 Docker Compose 操作。
 
+## 生产部署
+
+先生成管理员令牌并写入 `.env`：
+
+```powershell
+$token = [Convert]::ToHexString((1..32 | ForEach-Object { Get-Random -Maximum 256 }))
+"PUM_ADMIN_TOKEN=$token" | Set-Content .env
+```
+
+然后启动：
+
+```powershell
+docker compose -f docker-compose.production.yml up -d --build
+```
+
+服务默认只映射到 `127.0.0.1:8787`。公网访问必须通过反向代理，并建议在反向代理层继续启用登录认证。
+
+生产容器只读挂载宿主机 `/opt`，用于读取各项目的 Compose 配置；Docker 操作通过 `/var/run/docker.sock` 执行。网页写操作还需要 `PUM_ADMIN_TOKEN`。
+
+## 更新策略
+
+- `image`：允许平台拉取镜像并强制重建 Compose 服务。
+- `manual`：只展示项目状态，禁用通用更新按钮。适用于有本地补丁或源码构建流程的项目。

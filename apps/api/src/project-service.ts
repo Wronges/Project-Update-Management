@@ -59,6 +59,11 @@ export class ProjectService {
 
   createTask(projectId: string, kind: UpdateTask["kind"]): UpdateTask {
     const project = this.requireProject(projectId);
+    if (kind === "update" && project.updateStrategy === "manual") {
+      throw new Error(
+        project.manualUpdateNote ?? `Project ${projectId} requires a manual update`
+      );
+    }
     if (this.locks.has(projectId)) {
       throw new Error(`Project ${projectId} already has an active task`);
     }
@@ -101,6 +106,7 @@ export class ProjectService {
         const recreate = await this.docker.recreate(project);
         appendLog(task, "recreate", recreate.stdout, recreate.stderr);
         await wait(3000);
+        await this.verifyHealth(project);
       }
 
       await this.refreshRuntime(project, task.nextImageId);
@@ -120,6 +126,31 @@ export class ProjectService {
       this.tasks.update(task);
       this.locks.delete(project.id);
     }
+  }
+
+  private async verifyHealth(project: ProjectDefinition): Promise<void> {
+    if (!project.healthUrl) return;
+
+    const healthUrl = rewriteHealthHost(
+      project.healthUrl,
+      process.env.PUM_HEALTH_HOST_ALIAS ?? ""
+    );
+    let lastError = "health check failed";
+
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      try {
+        const response = await fetch(healthUrl, {
+          signal: AbortSignal.timeout(5000)
+        });
+        if (response.ok) return;
+        lastError = `health check returned HTTP ${response.status}`;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      await wait(2000);
+    }
+
+    throw new Error(lastError);
   }
 
   private async refreshRuntime(
@@ -200,3 +231,11 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function rewriteHealthHost(url: string, alias: string): string {
+  if (!alias) return url;
+  const parsed = new URL(url);
+  if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
+    parsed.hostname = alias;
+  }
+  return parsed.toString();
+}

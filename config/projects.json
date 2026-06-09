@@ -9,7 +9,8 @@
     "containerName": "cli-proxy-api",
     "image": "eceasy/cli-proxy-api:latest",
     "healthUrl": "http://127.0.0.1:8317/management.html",
-    "updatePolicy": "manual"
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
   },
   {
     "id": "infinite-canvas",
@@ -21,7 +22,61 @@
     "containerName": "infinite-canvas",
     "image": "ghcr.io/basketikun/infinite-canvas:latest",
     "healthUrl": "http://127.0.0.1:3012/",
-    "updatePolicy": "manual"
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
+  },
+  {
+    "id": "grok2api",
+    "name": "grok2api",
+    "repository": "https://github.com/chenyme/grok2api",
+    "server": "primary",
+    "composeDirectory": "/opt/grok2api",
+    "composeService": "grok2api",
+    "containerName": "grok2api",
+    "image": "ghcr.io/chenyme/grok2api:latest",
+    "healthUrl": "http://127.0.0.1:3014/",
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
+  },
+  {
+    "id": "chatgpt2api",
+    "name": "chatgpt2api",
+    "repository": "https://github.com/basketikun/chatgpt2api",
+    "server": "primary",
+    "composeDirectory": "/opt/chatgpt2api",
+    "composeService": "app",
+    "containerName": "chatgpt2api",
+    "image": "chatgpt2api-local:patched",
+    "healthUrl": "http://127.0.0.1:3010/",
+    "updatePolicy": "manual",
+    "updateStrategy": "manual",
+    "manualUpdateNote": "该项目包含本地配置和 UI 补丁，更新前必须比较上游改动并受控合并。"
+  },
+  {
+    "id": "metapi",
+    "name": "metapi",
+    "repository": "https://github.com/cita-777/metapi",
+    "server": "primary",
+    "composeDirectory": "/opt/metapi",
+    "composeService": "metapi",
+    "containerName": "metapi",
+    "image": "1467078763/metapi:latest",
+    "healthUrl": "http://127.0.0.1:3013/",
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
+  },
+  {
+    "id": "aiclient2api",
+    "name": "aiclient2api",
+    "repository": "https://github.com/justlovemaki/AIClient2API",
+    "server": "primary",
+    "composeDirectory": "/opt/aiclient2api",
+    "composeService": "aiclient-api",
+    "containerName": "aiclient2api",
+    "image": "justlikemaki/aiclient-2-api:latest",
+    "healthUrl": "http://127.0.0.1:3011/",
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
   },
   {
     "id": "new-api",
@@ -33,7 +88,34 @@
     "containerName": "new-api",
     "image": "calciumion/new-api:latest",
     "healthUrl": "http://127.0.0.1:3003/",
-    "updatePolicy": "manual"
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
+  },
+  {
+    "id": "team-manage-app",
+    "name": "team-manage-app",
+    "repository": "https://github.com/Wronges/team-manage-refresh",
+    "server": "primary",
+    "composeDirectory": "/opt/team-manage-refresh",
+    "composeService": "app",
+    "containerName": "team-manage-app",
+    "image": "team-manage-refresh-app",
+    "healthUrl": "http://127.0.0.1:8009/",
+    "updatePolicy": "manual",
+    "updateStrategy": "manual",
+    "manualUpdateNote": "该项目使用本地源码构建，需先检查 Git 工作区和上游提交，再重新构建。"
+  },
+  {
+    "id": "uptime-kuma",
+    "name": "uptime-kuma",
+    "repository": "https://github.com/louislam/uptime-kuma",
+    "server": "primary",
+    "composeDirectory": "/opt/uptime-kuma",
+    "composeService": "uptime-kuma",
+    "containerName": "uptime-kuma",
+    "image": "louislam/uptime-kuma:1",
+    "healthUrl": "http://127.0.0.1:3002/",
+    "updatePolicy": "manual",
+    "updateStrategy": "image"
   }
 ]
-

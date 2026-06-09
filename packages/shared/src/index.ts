@@ -10,7 +10,9 @@ export const projectDefinitionSchema = z.object({
   containerName: z.string().min(1),
   image: z.string().min(1),
   healthUrl: z.string().url().optional(),
-  updatePolicy: z.enum(["manual", "scheduled"]).default("manual")
+  updatePolicy: z.enum(["manual", "scheduled"]).default("manual"),
+  updateStrategy: z.enum(["image", "manual"]).default("image"),
+  manualUpdateNote: z.string().optional()
 });
 
 export const projectInventorySchema = z.array(projectDefinitionSchema);
@@ -57,4 +59,3 @@ export interface DashboardSummary {
   failedCount: number;
   updatedTodayCount: number;
 }
-

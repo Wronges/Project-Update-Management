@@ -1,0 +1,24 @@
+services:
+  project-update-management:
+    build: .
+    image: project-update-management:local
+    container_name: project-update-management
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      PUM_HOST: 0.0.0.0
+      PUM_PORT: 8787
+      PUM_INVENTORY: /app/config/projects.json
+      PUM_DATABASE: /app/data/project-update.db
+      PUM_WEB_ROOT: /app/apps/web/dist
+      PUM_ADMIN_TOKEN: ${PUM_ADMIN_TOKEN:?PUM_ADMIN_TOKEN is required}
+      PUM_HEALTH_HOST_ALIAS: host.docker.internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt:/opt:ro
+      - ./data:/app/data
+      - ./config/projects.json:/app/config/projects.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+

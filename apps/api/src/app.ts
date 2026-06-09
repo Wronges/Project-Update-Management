@@ -1,5 +1,7 @@
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
+import { existsSync } from "node:fs";
 import { appConfig } from "./config.js";
 import { TaskDatabase } from "./database.js";
 import { DockerAdapter } from "./docker.js";
@@ -9,13 +11,34 @@ import { ProjectService } from "./project-service.js";
 export async function buildApp() {
   const app = Fastify({ logger: true });
   await app.register(cors, { origin: true });
+  if (existsSync(appConfig.webRoot)) {
+    await app.register(fastifyStatic, {
+      root: appConfig.webRoot,
+      wildcard: false
+    });
+  }
 
   const inventory = await loadInventory(appConfig.inventoryPath);
   const tasks = new TaskDatabase(appConfig.databasePath);
   const projects = new ProjectService(inventory, new DockerAdapter(), tasks);
   await projects.initialize();
 
-  app.get("/api/health", async () => ({ status: "ok" }));
+  app.addHook("preHandler", async (request, reply) => {
+    if (request.method === "GET" || request.method === "HEAD") return;
+    if (!appConfig.adminToken) {
+      return reply.code(503).send({
+        error: "PUM_ADMIN_TOKEN is not configured; update operations are disabled"
+      });
+    }
+    if (request.headers["x-pum-token"] !== appConfig.adminToken) {
+      return reply.code(401).send({ error: "Invalid administrator token" });
+    }
+  });
+
+  app.get("/api/health", async () => ({
+    status: "ok",
+    mutationsEnabled: Boolean(appConfig.adminToken)
+  }));
   app.get("/api/dashboard", async () => ({
     summary: projects.summary(),
     projects: projects.list(),
@@ -60,7 +83,14 @@ export async function buildApp() {
     const task = tasks.get(request.params.id);
     return task ? task : reply.code(404).send({ error: "Task not found" });
   });
+  if (existsSync(appConfig.webRoot)) {
+    app.setNotFoundHandler(async (request, reply) => {
+      if (request.url.startsWith("/api/")) {
+        return reply.code(404).send({ error: "Route not found" });
+      }
+      return reply.sendFile("index.html");
+    });
+  }
 
   return app;
 }
-
