@@ -59,3 +59,41 @@ export interface DashboardSummary {
   failedCount: number;
   updatedTodayCount: number;
 }
+
+export interface ServerResourceUsage {
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  usedPercent: number;
+}
+
+export interface ContainerResourceStatus {
+  id: string;
+  name: string;
+  state: string;
+  status: string;
+  cpuPercent: number;
+  memoryPercent: number;
+  memoryUsage: string;
+  networkIo: string;
+  blockIo: string;
+  pids: number;
+}
+
+export interface ServerStatusPayload {
+  collectedAt: string;
+  hostname: string;
+  platform: string;
+  uptimeSeconds: number;
+  cpuCount: number;
+  loadAverage: [number, number, number];
+  loadPercent: number;
+  memory: ServerResourceUsage;
+  disk: ServerResourceUsage;
+  containers: {
+    total: number;
+    running: number;
+    stopped: number;
+    items: ContainerResourceStatus[];
+  };
+}

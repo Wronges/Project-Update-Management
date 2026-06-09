@@ -5,10 +5,13 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  Cpu,
   ExternalLink,
+  HardDrive,
   History,
   LayoutDashboard,
   LoaderCircle,
+  MemoryStick,
   RefreshCw,
   Search,
   Server,
@@ -19,6 +22,7 @@ import { useEffect, useEffectEvent, useState } from "react";
 import type {
   DashboardSummary,
   ProjectStatus,
+  ServerStatusPayload,
   UpdateTask
 } from "@pum/shared";
 
@@ -37,11 +41,13 @@ const emptySummary: DashboardSummary = {
 };
 
 export function App() {
+  const [activeView, setActiveView] = useState<"projects" | "server">("projects");
   const [dashboard, setDashboard] = useState<DashboardPayload>({
     summary: emptySummary,
     projects: [],
     recentTasks: []
   });
+  const [serverStatus, setServerStatus] = useState<ServerStatusPayload | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [onlyUpdates, setOnlyUpdates] = useState(false);
@@ -62,11 +68,33 @@ export function App() {
     }
   });
 
+  const loadServerStatus = useEffectEvent(async () => {
+    try {
+      const response = await fetch("/api/server-status");
+      if (!response.ok) throw new Error("无法读取服务器状态");
+      setServerStatus(await response.json());
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  const refreshActiveView = useEffectEvent(async () => {
+    setLoading(true);
+    if (activeView === "server") {
+      await loadServerStatus();
+      return;
+    }
+    await loadDashboard();
+  });
+
   useEffect(() => {
-    void loadDashboard();
-    const timer = window.setInterval(() => void loadDashboard(), 5000);
+    void refreshActiveView();
+    const timer = window.setInterval(() => void refreshActiveView(), 5000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [activeView]);
 
   const selected =
     dashboard.projects.find((project) => project.id === selectedId) ?? null;
@@ -130,35 +158,57 @@ export function App() {
             主服务器
             <ChevronRight size={15} />
           </button>
-          <button className="button secondary" onClick={() => void loadDashboard()}>
+          <button className="button secondary" onClick={() => void refreshActiveView()}>
             <RefreshCw size={16} className={loading ? "spin" : ""} />
             刷新
           </button>
-          <button className="button primary" onClick={() => void updateSelected()}>
-            <Boxes size={16} />
-            更新全部可更新项
-          </button>
-          <label className="search">
-            <Search size={16} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索项目名 / 容器名"
-            />
-          </label>
+          {activeView === "projects" && (
+            <>
+              <button className="button primary" onClick={() => void updateSelected()}>
+                <Boxes size={16} />
+                更新全部可更新项
+              </button>
+              <label className="search">
+                <Search size={16} />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="搜索项目名 / 容器名"
+                />
+              </label>
+            </>
+          )}
         </div>
       </header>
 
       <aside className="sidebar">
-        <NavItem icon={<LayoutDashboard size={18} />} label="总览" />
-        <NavItem icon={<Boxes size={18} />} label="项目更新" active />
-        <NavItem icon={<History size={18} />} label="更新历史" />
-        <NavItem icon={<Activity size={18} />} label="服务器状态" />
-        <NavItem icon={<Settings size={18} />} label="设置" />
+        <NavItem icon={<LayoutDashboard size={18} />} label="总览" disabled />
+        <NavItem
+          icon={<Boxes size={18} />}
+          label="项目更新"
+          active={activeView === "projects"}
+          onClick={() => {
+            setSelectedId(null);
+            setActiveView("projects");
+          }}
+        />
+        <NavItem icon={<History size={18} />} label="更新历史" disabled />
+        <NavItem
+          icon={<Activity size={18} />}
+          label="服务器状态"
+          active={activeView === "server"}
+          onClick={() => {
+            setSelectedId(null);
+            setActiveView("server");
+          }}
+        />
+        <NavItem icon={<Settings size={18} />} label="设置" disabled />
       </aside>
 
       <main className="main">
         {error && <div className="error-banner">{error}</div>}
+        {activeView === "projects" ? (
+          <>
         <section className="summary-grid">
           <SummaryCard label="项目总数" value={dashboard.summary.projectCount} />
           <SummaryCard
@@ -277,9 +327,15 @@ export function App() {
             )}
           </div>
         </section>
+          </>
+        ) : serverStatus ? (
+          <ServerStatusView status={serverStatus} />
+        ) : (
+          <div className="empty-state">正在读取服务器状态...</div>
+        )}
       </main>
 
-      {selected && (
+      {activeView === "projects" && selected && (
         <aside className="detail-panel">
           <div className="detail-header">
             <div>
@@ -338,13 +394,147 @@ export function App() {
 function NavItem({
   icon,
   label,
-  active = false
+  active = false,
+  disabled = false,
+  onClick
 }: {
   icon: React.ReactNode;
   label: string;
   active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
 }) {
-  return <button className={`nav-item ${active ? "active" : ""}`}>{icon}{label}</button>;
+  return (
+    <button
+      className={`nav-item ${active ? "active" : ""}`}
+      disabled={disabled}
+      title={disabled ? "该页面尚未实现" : undefined}
+      onClick={onClick}
+    >
+      {icon}{label}
+    </button>
+  );
+}
+
+function ServerStatusView({ status }: { status: ServerStatusPayload }) {
+  return (
+    <div className="server-status-page">
+      <section className="server-hero">
+        <div>
+          <span className="eyebrow">PRIMARY SERVER</span>
+          <h2>{status.hostname}</h2>
+          <p>{status.platform}</p>
+        </div>
+        <div className="server-live">
+          <i />
+          在线
+          <span>采集于 {formatTime(status.collectedAt)}</span>
+        </div>
+      </section>
+
+      <section className="metric-grid">
+        <MetricCard
+          icon={<Cpu size={19} />}
+          label="CPU 负载"
+          value={`${status.loadPercent.toFixed(1)}%`}
+          detail={`${status.cpuCount} 核 · Load ${status.loadAverage[0].toFixed(2)}`}
+          percent={status.loadPercent}
+        />
+        <MetricCard
+          icon={<MemoryStick size={19} />}
+          label="内存"
+          value={`${status.memory.usedPercent.toFixed(1)}%`}
+          detail={`${formatBytes(status.memory.usedBytes)} / ${formatBytes(status.memory.totalBytes)}`}
+          percent={status.memory.usedPercent}
+        />
+        <MetricCard
+          icon={<HardDrive size={19} />}
+          label="根磁盘"
+          value={`${status.disk.usedPercent.toFixed(1)}%`}
+          detail={`${formatBytes(status.disk.usedBytes)} / ${formatBytes(status.disk.totalBytes)}`}
+          percent={status.disk.usedPercent}
+        />
+        <MetricCard
+          icon={<Boxes size={19} />}
+          label="Docker 容器"
+          value={`${status.containers.running} / ${status.containers.total}`}
+          detail={`${status.containers.stopped} 个已停止 · 运行 ${formatDuration(status.uptimeSeconds)}`}
+          percent={
+            status.containers.total
+              ? (status.containers.running / status.containers.total) * 100
+              : 0
+          }
+        />
+      </section>
+
+      <section className="panel server-containers">
+        <div className="panel-toolbar">
+          <div>
+            <h2>容器资源占用</h2>
+            <span>按内存占用从高到低排列</span>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>容器</th>
+                <th>状态</th>
+                <th>CPU</th>
+                <th>内存</th>
+                <th>内存占比</th>
+                <th>网络 I/O</th>
+                <th>磁盘 I/O</th>
+                <th>进程数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {status.containers.items.map((container) => (
+                <tr key={container.id || container.name}>
+                  <td className="project-name">{container.name}</td>
+                  <td>
+                    <RuntimeBadge running={container.state === "running"} />
+                  </td>
+                  <td>{container.cpuPercent.toFixed(2)}%</td>
+                  <td className="hash">{container.memoryUsage}</td>
+                  <td>{container.memoryPercent.toFixed(2)}%</td>
+                  <td className="hash">{container.networkIo}</td>
+                  <td className="hash">{container.blockIo}</td>
+                  <td>{container.pids}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  detail,
+  percent
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+  percent: number;
+}) {
+  return (
+    <article className="metric-card">
+      <div className="metric-icon">{icon}</div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+      <div className="metric-track">
+        <i style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }} />
+      </div>
+    </article>
+  );
 }
 
 function SummaryCard({
@@ -421,4 +611,20 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function formatBytes(value: number): string {
+  if (!value) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const unitIndex = Math.min(
+    Math.floor(Math.log(value) / Math.log(1024)),
+    units.length - 1
+  );
+  return `${(value / 1024 ** unitIndex).toFixed(unitIndex > 2 ? 1 : 0)} ${units[unitIndex]}`;
+}
+
+function formatDuration(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  return days ? `${days} 天 ${hours} 小时` : `${hours} 小时`;
 }

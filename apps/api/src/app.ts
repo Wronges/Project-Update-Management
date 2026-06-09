@@ -7,6 +7,7 @@ import { TaskDatabase } from "./database.js";
 import { DockerAdapter } from "./docker.js";
 import { loadInventory } from "./inventory.js";
 import { ProjectService } from "./project-service.js";
+import { collectServerStatus } from "./server-status.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -44,6 +45,7 @@ export async function buildApp() {
     projects: projects.list(),
     recentTasks: tasks.list(20)
   }));
+  app.get("/api/server-status", async () => collectServerStatus());
   app.get("/api/projects", async () => projects.list());
   app.get<{ Params: { id: string } }>("/api/projects/:id", async (request) => ({
     project: projects.get(request.params.id),
