@@ -47,6 +47,8 @@ docker compose -f docker-compose.production.yml up -d --build
 
 更新后健康检查失败时默认自动把镜像标签恢复到更新前的镜像 ID 并重建服务。可通过 `PUM_ROLLBACK_ON_FAILURE=false` 关闭；“今日已更新”默认按 `PUM_TIME_ZONE=Asia/Shanghai` 统计。
 
+后台默认每 60 分钟依次执行一次项目检查，可通过 `PUM_CHECK_INTERVAL_MINUTES` 调整，设为 `0` 禁用。为避免 Docker Hub 匿名拉取限流，非零间隔最低按 30 分钟执行。任务记录保留 30 天并在每轮调度后自动清理。
+
 公网接入示例位于 `deploy/nginx/`。管理页面应至少启用 HTTPS 和 Basic Auth，应用层写操作仍由 `PUM_ADMIN_TOKEN` 二次保护。
 
 ## 更新策略

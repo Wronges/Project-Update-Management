@@ -119,6 +119,7 @@ describe("ProjectService", () => {
         id: "task-1",
         projectId: imageProject.id,
         kind: "update",
+        trigger: "manual",
         status: "succeeded",
         previousImageId: null,
         nextImageId: null,
@@ -220,6 +221,18 @@ function createTaskStore() {
     list: vi.fn(() => stored),
     latestForProject: vi.fn((projectId: string) => {
       return [...stored].reverse().find((task) => task.projectId === projectId) ?? null;
+    }),
+    latestSuccessfulUpdateForProject: vi.fn((projectId: string) => {
+      return (
+        [...stored]
+          .reverse()
+          .find(
+            (task) =>
+              task.projectId === projectId &&
+              task.kind === "update" &&
+              task.status === "succeeded"
+          ) ?? null
+      );
     })
   };
 }

@@ -48,6 +48,7 @@ export interface UpdateTask {
   id: string;
   projectId: string;
   kind: "check" | "update";
+  trigger: "manual" | "scheduled";
   status: "queued" | "running" | "succeeded" | "failed";
   previousImageId: string | null;
   nextImageId: string | null;

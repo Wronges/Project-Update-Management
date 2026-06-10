@@ -8,6 +8,7 @@ import { DockerAdapter } from "./docker.js";
 import { ProjectConflictError, ProjectNotFoundError } from "./errors.js";
 import { loadInventory } from "./inventory.js";
 import { ProjectService } from "./project-service.js";
+import { ProjectCheckScheduler } from "./scheduler.js";
 import { collectServerStatus } from "./server-status.js";
 
 export async function buildApp() {
@@ -21,13 +22,21 @@ export async function buildApp() {
 
   const inventory = await loadInventory(appConfig.inventoryPath);
   const tasks = new TaskDatabase(appConfig.databasePath);
-  app.addHook("onClose", async () => tasks.close());
   const projects = new ProjectService(inventory, new DockerAdapter(), tasks, {
     healthHostAlias: appConfig.healthHostAlias,
     timeZone: appConfig.timeZone,
     rollbackOnFailure: appConfig.rollbackOnFailure
   });
   await projects.initialize();
+  const scheduler = new ProjectCheckScheduler(projects, tasks, {
+    intervalMinutes: appConfig.checkIntervalMinutes,
+    logger: app.log
+  });
+  scheduler.start();
+  app.addHook("onClose", async () => {
+    await scheduler.stop();
+    tasks.close();
+  });
 
   app.addHook("preHandler", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD") return;
@@ -50,7 +59,7 @@ export async function buildApp() {
     return {
       summary: projects.summary(),
       projects: projects.list(),
-      recentTasks: tasks.list(20)
+      recentTasks: tasks.listVisible(20)
     };
   });
   app.get("/api/server-status", async () => collectServerStatus());
@@ -76,7 +85,9 @@ export async function buildApp() {
     "/api/projects/:id/check",
     async (request, reply) => {
       try {
-        return reply.code(202).send(projects.createTask(request.params.id, "check"));
+        return reply
+          .code(202)
+          .send(projects.createTask(request.params.id, "check", "manual"));
       } catch (error) {
         return sendProjectError(reply, error);
       }
@@ -88,7 +99,7 @@ export async function buildApp() {
       try {
         return reply
           .code(202)
-          .send(projects.createTask(request.params.id, "update"));
+          .send(projects.createTask(request.params.id, "update", "manual"));
       } catch (error) {
         return sendProjectError(reply, error);
       }

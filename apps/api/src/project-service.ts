@@ -22,7 +22,11 @@ type DockerClient = Pick<
 
 type TaskStore = Pick<
   TaskDatabase,
-  "create" | "update" | "list" | "latestForProject"
+  | "create"
+  | "update"
+  | "list"
+  | "latestForProject"
+  | "latestSuccessfulUpdateForProject"
 >;
 
 interface ProjectServiceOptions {
@@ -133,7 +137,15 @@ export class ProjectService {
     };
   }
 
-  createTask(projectId: string, kind: UpdateTask["kind"]): UpdateTask {
+  isLocked(projectId: string): boolean {
+    return this.locks.has(projectId);
+  }
+
+  createTask(
+    projectId: string,
+    kind: UpdateTask["kind"],
+    trigger: UpdateTask["trigger"] = "manual"
+  ): UpdateTask {
     const project = this.requireProject(projectId);
     if (kind === "update" && project.updateStrategy === "manual") {
       throw new ProjectConflictError(
@@ -151,6 +163,7 @@ export class ProjectService {
       id: randomUUID(),
       projectId,
       kind,
+      trigger,
       status: "queued",
       previousImageId: this.getStatus(project).runningImageId,
       nextImageId: null,
@@ -226,6 +239,15 @@ export class ProjectService {
       task.finishedAt = new Date().toISOString();
       try {
         this.tasks.update(task);
+        const current = this.getStatus(project);
+        this.statuses.set(project.id, {
+          ...current,
+          lastCheckedAt: task.finishedAt,
+          lastUpdatedAt:
+            task.kind === "update" && task.status === "succeeded"
+              ? task.finishedAt
+              : current.lastUpdatedAt
+        });
       } finally {
         this.locks.delete(project.id);
       }
@@ -289,6 +311,8 @@ export class ProjectService {
         : Promise.resolve(latestOverride)
     ]);
     const lastTask = this.tasks.latestForProject(project.id);
+    const lastSuccessfulUpdate =
+      this.tasks.latestSuccessfulUpdateForProject(project.id);
 
     this.statuses.set(project.id, {
       ...project,
@@ -302,10 +326,7 @@ export class ProjectService {
       runningImageId,
       latestImageId: localImageId,
       lastCheckedAt: lastTask?.finishedAt ?? null,
-      lastUpdatedAt:
-        lastTask?.kind === "update" && lastTask.status === "succeeded"
-          ? lastTask.finishedAt
-          : null
+      lastUpdatedAt: lastSuccessfulUpdate?.finishedAt ?? null
     });
   }
 

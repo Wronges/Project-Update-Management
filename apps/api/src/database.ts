@@ -14,6 +14,7 @@ export class TaskDatabase {
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         kind TEXT NOT NULL,
+        trigger TEXT NOT NULL DEFAULT 'manual',
         status TEXT NOT NULL,
         previous_image_id TEXT,
         next_image_id TEXT,
@@ -26,6 +27,7 @@ export class TaskDatabase {
       CREATE INDEX IF NOT EXISTS idx_update_tasks_project_created
       ON update_tasks(project_id, created_at DESC);
     `);
+    this.ensureTriggerColumn();
     this.recoverInterruptedTasks();
   }
 
@@ -33,14 +35,15 @@ export class TaskDatabase {
     this.database
       .prepare(`
         INSERT INTO update_tasks (
-          id, project_id, kind, status, previous_image_id, next_image_id,
+          id, project_id, kind, trigger, status, previous_image_id, next_image_id,
           started_at, finished_at, created_at, error, log
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         task.id,
         task.projectId,
         task.kind,
+        task.trigger,
         task.status,
         task.previousImageId,
         task.nextImageId,
@@ -83,9 +86,26 @@ export class TaskDatabase {
     const rows = this.database
       .prepare(`
         SELECT
-          id, project_id, kind, status, previous_image_id, next_image_id,
+          id, project_id, kind, trigger, status, previous_image_id, next_image_id,
           started_at, finished_at, created_at, error, '' AS log
         FROM update_tasks
+        ORDER BY created_at DESC
+        LIMIT ?
+      `)
+      .all(limit) as unknown as TaskRow[];
+    return rows.map(mapTask);
+  }
+
+  listVisible(limit = 50): UpdateTask[] {
+    const rows = this.database
+      .prepare(`
+        SELECT
+          id, project_id, kind, trigger, status, previous_image_id, next_image_id,
+          started_at, finished_at, created_at, error, '' AS log
+        FROM update_tasks
+        WHERE NOT (
+          trigger = 'scheduled' AND kind = 'check' AND status = 'succeeded'
+        )
         ORDER BY created_at DESC
         LIMIT ?
       `)
@@ -97,7 +117,7 @@ export class TaskDatabase {
     const rows = this.database
       .prepare(`
         SELECT
-          id, project_id, kind, status, previous_image_id, next_image_id,
+          id, project_id, kind, trigger, status, previous_image_id, next_image_id,
           started_at, finished_at, created_at, error, '' AS log
         FROM update_tasks
         WHERE project_id = ?
@@ -112,7 +132,7 @@ export class TaskDatabase {
     const row = this.database
       .prepare(`
         SELECT
-          id, project_id, kind, status, previous_image_id, next_image_id,
+          id, project_id, kind, trigger, status, previous_image_id, next_image_id,
           started_at, finished_at, created_at, error, '' AS log
         FROM update_tasks
         WHERE project_id = ?
@@ -123,8 +143,40 @@ export class TaskDatabase {
     return row ? mapTask(row) : null;
   }
 
+  latestSuccessfulUpdateForProject(projectId: string): UpdateTask | null {
+    const row = this.database
+      .prepare(`
+        SELECT
+          id, project_id, kind, trigger, status, previous_image_id, next_image_id,
+          started_at, finished_at, created_at, error, '' AS log
+        FROM update_tasks
+        WHERE project_id = ? AND kind = 'update' AND status = 'succeeded'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `)
+      .get(projectId) as TaskRow | undefined;
+    return row ? mapTask(row) : null;
+  }
+
+  prune(before: Date): number {
+    const result = this.database
+      .prepare("DELETE FROM update_tasks WHERE created_at < ?")
+      .run(before.toISOString());
+    return Number(result.changes);
+  }
+
   close(): void {
     this.database.close();
+  }
+
+  private ensureTriggerColumn(): void {
+    const columns = this.database
+      .prepare("PRAGMA table_info(update_tasks)")
+      .all() as unknown as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "trigger")) return;
+    this.database.exec(
+      "ALTER TABLE update_tasks ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual'"
+    );
   }
 
   private recoverInterruptedTasks(): void {
@@ -148,6 +200,7 @@ interface TaskRow {
   id: string;
   project_id: string;
   kind: "check" | "update";
+  trigger: UpdateTask["trigger"];
   status: UpdateTask["status"];
   previous_image_id: string | null;
   next_image_id: string | null;
@@ -163,6 +216,7 @@ function mapTask(row: TaskRow): UpdateTask {
     id: row.id,
     projectId: row.project_id,
     kind: row.kind,
+    trigger: row.trigger,
     status: row.status,
     previousImageId: row.previous_image_id,
     nextImageId: row.next_image_id,

@@ -14,6 +14,7 @@ services:
       PUM_ADMIN_TOKEN: ${PUM_ADMIN_TOKEN:?PUM_ADMIN_TOKEN is required}
       PUM_TIME_ZONE: ${PUM_TIME_ZONE:-Asia/Shanghai}
       PUM_ROLLBACK_ON_FAILURE: ${PUM_ROLLBACK_ON_FAILURE:-true}
+      PUM_CHECK_INTERVAL_MINUTES: ${PUM_CHECK_INTERVAL_MINUTES:-60}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt:/opt:ro

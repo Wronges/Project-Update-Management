@@ -103,6 +103,16 @@ export function App() {
       !onlyUpdates || project.updateStatus === "update_available";
     return matchesQuery && matchesUpdate;
   });
+  const visibleRecentTasks = dashboard.recentTasks
+    .filter(
+      (task) =>
+        !(
+          task.trigger === "scheduled" &&
+          task.kind === "check" &&
+          task.status === "succeeded"
+        )
+    )
+    .slice(0, 8);
 
   async function runAction(
     projectId: string,
@@ -300,6 +310,7 @@ export function App() {
                   <th>最新镜像</th>
                   <th>更新状态</th>
                   <th>运行状态</th>
+                  <th>上次检查</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -313,6 +324,7 @@ export function App() {
                     <td className="hash">{shortId(project.latestImageId)}</td>
                     <td><UpdateBadge status={project.updateStatus} /></td>
                     <td><RuntimeBadge status={project.runtimeStatus} /></td>
+                    <td>{formatRelativeTime(project.lastCheckedAt)}</td>
                     <td>
                       <div className="row-actions">
                         <button onClick={() => setSelectedId(project.id)}>查看</button>
@@ -349,19 +361,24 @@ export function App() {
             </div>
           </div>
           <div className="history-list">
-            {dashboard.recentTasks.slice(0, 8).map((task) => (
+            {visibleRecentTasks.map((task) => (
               <article className="history-item" key={task.id}>
                 <TaskIcon status={task.status} />
                 <div>
                   <strong>{task.projectId}</strong>
-                  <span>{task.kind === "update" ? "更新" : "检查"}</span>
+                  <span>
+                    {task.kind === "update" ? "更新" : "检查"}
+                    {task.trigger === "scheduled" && (
+                      <em className="task-trigger">自动</em>
+                    )}
+                  </span>
                 </div>
                 <time>{formatTime(task.finishedAt ?? task.createdAt)}</time>
                 <code>{shortId(task.previousImageId)} → {shortId(task.nextImageId)}</code>
                 <TaskStatus status={task.status} />
               </article>
             ))}
-            {!dashboard.recentTasks.length && (
+            {!visibleRecentTasks.length && (
               <div className="empty-state">还没有更新任务记录</div>
             )}
           </div>
@@ -678,4 +695,18 @@ function formatDuration(seconds: number): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   return days ? `${days} 天 ${hours} 小时` : `${hours} 小时`;
+}
+
+function formatRelativeTime(value: string | null): string {
+  if (!value) return "尚未检查";
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(value).getTime()) / 1000)
+  );
+  if (elapsedSeconds < 60) return "刚刚";
+  const minutes = Math.floor(elapsedSeconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
 }
