@@ -2,26 +2,23 @@ import {
   Activity,
   Boxes,
   CheckCircle2,
-  ChevronRight,
   CircleAlert,
   Clock3,
   Cpu,
   ExternalLink,
   HardDrive,
-  History,
-  LayoutDashboard,
   LoaderCircle,
   MemoryStick,
   RefreshCw,
   Search,
   Server,
-  Settings,
   X
 } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
 import type {
   DashboardSummary,
   ProjectStatus,
+  RuntimeStatus,
   ServerStatusPayload,
   UpdateTask
 } from "@pum/shared";
@@ -52,7 +49,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [onlyUpdates, setOnlyUpdates] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [actionId, setActionId] = useState<string | null>(null);
+  const [actionIds, setActionIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
 
   const loadDashboard = useEffectEvent(async () => {
@@ -81,8 +78,8 @@ export function App() {
     }
   });
 
-  const refreshActiveView = useEffectEvent(async () => {
-    setLoading(true);
+  const refreshActiveView = useEffectEvent(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     if (activeView === "server") {
       await loadServerStatus();
       return;
@@ -107,15 +104,51 @@ export function App() {
     return matchesQuery && matchesUpdate;
   });
 
-  async function runAction(projectId: string, action: "check" | "update") {
-    let token = window.sessionStorage.getItem("pum-admin-token") ?? "";
-    if (!token) {
-      token = window.prompt("请输入管理员令牌")?.trim() ?? "";
-      if (!token) return;
-      window.sessionStorage.setItem("pum-admin-token", token);
-    }
-    setActionId(projectId);
+  async function runAction(
+    projectId: string,
+    action: "check" | "update",
+    waitForCompletion = false
+  ) {
+    setActionIds((current) => new Set(current).add(projectId));
     try {
+      const task = await createTaskWithTokenRetry(projectId, action);
+      if (!task) return;
+      if (waitForCompletion) await waitForTask(task.id);
+      await loadDashboard();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setActionIds((current) => {
+        const next = new Set(current);
+        next.delete(projectId);
+        return next;
+      });
+    }
+  }
+
+  async function updateSelected() {
+    const ids = visibleProjects
+      .filter((project) => project.updateStatus === "update_available")
+      .map((project) => project.id);
+    if (!ids.length) return;
+    if (!window.confirm(`确定依次更新 ${ids.length} 个项目吗？`)) return;
+    for (const id of ids) {
+      await runAction(id, "update", true);
+    }
+  }
+
+  async function createTaskWithTokenRetry(
+    projectId: string,
+    action: "check" | "update"
+  ): Promise<UpdateTask | null> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let token = window.sessionStorage.getItem("pum-admin-token") ?? "";
+      if (!token) {
+        token = window.prompt("请输入管理员令牌")?.trim() ?? "";
+        if (!token) return null;
+        window.sessionStorage.setItem("pum-admin-token", token);
+      }
+
       const response = await fetch(`/api/projects/${projectId}/${action}`, {
         method: "POST",
         headers: {
@@ -124,24 +157,29 @@ export function App() {
         },
         body: "{}"
       });
+      if (response.status === 401) {
+        window.sessionStorage.removeItem("pum-admin-token");
+        if (attempt === 0) continue;
+      }
       if (!response.ok) {
         const payload = await response.json();
         throw new Error(payload.error ?? "任务创建失败");
       }
-      await loadDashboard();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setActionId(null);
+      return response.json();
     }
+    throw new Error("管理员令牌无效");
   }
 
-  async function updateSelected() {
-    const ids = visibleProjects
-      .filter((project) => project.updateStatus === "update_available")
-      .map((project) => project.id);
-    for (const id of ids) {
-      await runAction(id, "update");
+  async function waitForTask(taskId: string): Promise<void> {
+    for (;;) {
+      const response = await fetch(`/api/tasks/${taskId}`);
+      if (!response.ok) throw new Error("无法读取任务状态");
+      const task = (await response.json()) as UpdateTask;
+      if (task.status === "succeeded") return;
+      if (task.status === "failed") {
+        throw new Error(task.error ?? "更新任务失败");
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
     }
   }
 
@@ -153,12 +191,11 @@ export function App() {
           <p>Docker 服务版本与更新任务控制台</p>
         </div>
         <div className="topbar-actions">
-          <button className="server-select">
+          <div className="server-select">
             <Server size={16} />
             主服务器
-            <ChevronRight size={15} />
-          </button>
-          <button className="button secondary" onClick={() => void refreshActiveView()}>
+          </div>
+          <button className="button secondary" onClick={() => void refreshActiveView(true)}>
             <RefreshCw size={16} className={loading ? "spin" : ""} />
             刷新
           </button>
@@ -182,7 +219,6 @@ export function App() {
       </header>
 
       <aside className="sidebar">
-        <NavItem icon={<LayoutDashboard size={18} />} label="总览" disabled />
         <NavItem
           icon={<Boxes size={18} />}
           label="项目更新"
@@ -192,7 +228,6 @@ export function App() {
             setActiveView("projects");
           }}
         />
-        <NavItem icon={<History size={18} />} label="更新历史" disabled />
         <NavItem
           icon={<Activity size={18} />}
           label="服务器状态"
@@ -202,7 +237,6 @@ export function App() {
             setActiveView("server");
           }}
         />
-        <NavItem icon={<Settings size={18} />} label="设置" disabled />
       </aside>
 
       <main className="main">
@@ -273,25 +307,25 @@ export function App() {
                     <td className="hash">{shortId(project.runningImageId)}</td>
                     <td className="hash">{shortId(project.latestImageId)}</td>
                     <td><UpdateBadge status={project.updateStatus} /></td>
-                    <td><RuntimeBadge running={project.runtimeStatus === "running"} /></td>
+                    <td><RuntimeBadge status={project.runtimeStatus} /></td>
                     <td>
                       <div className="row-actions">
                         <button onClick={() => setSelectedId(project.id)}>查看</button>
                         <button
-                          disabled={actionId === project.id}
+                          disabled={actionIds.has(project.id)}
                           onClick={() => void runAction(project.id, "check")}
                         >
                           检查
                         </button>
                         <button
                           disabled={
-                            actionId === project.id ||
+                            actionIds.has(project.id) ||
                             project.updateStrategy === "manual"
                           }
                           title={project.manualUpdateNote}
                           onClick={() => void runAction(project.id, "update")}
                         >
-                          {actionId === project.id ? "执行中" : "更新"}
+                          {actionIds.has(project.id) ? "执行中" : "更新"}
                         </button>
                       </div>
                     </td>
@@ -370,6 +404,7 @@ export function App() {
           <div className="detail-actions">
             <button
               className="button secondary"
+              disabled={actionIds.has(selected.id)}
               onClick={() => void runAction(selected.id, "check")}
             >
               <RefreshCw size={16} />
@@ -377,7 +412,10 @@ export function App() {
             </button>
             <button
               className="button primary"
-              disabled={selected.updateStrategy === "manual"}
+              disabled={
+                actionIds.has(selected.id) ||
+                selected.updateStrategy === "manual"
+              }
               title={selected.manualUpdateNote}
               onClick={() => void runAction(selected.id, "update")}
             >
@@ -395,20 +433,16 @@ function NavItem({
   icon,
   label,
   active = false,
-  disabled = false,
   onClick
 }: {
   icon: React.ReactNode;
   label: string;
   active?: boolean;
-  disabled?: boolean;
   onClick?: () => void;
 }) {
   return (
     <button
       className={`nav-item ${active ? "active" : ""}`}
-      disabled={disabled}
-      title={disabled ? "该页面尚未实现" : undefined}
       onClick={onClick}
     >
       {icon}{label}
@@ -493,7 +527,7 @@ function ServerStatusView({ status }: { status: ServerStatusPayload }) {
                 <tr key={container.id || container.name}>
                   <td className="project-name">{container.name}</td>
                   <td>
-                    <RuntimeBadge running={container.state === "running"} />
+                    <RuntimeBadge status={container.state} />
                   </td>
                   <td>{container.cpuPercent.toFixed(2)}%</td>
                   <td className="hash">{container.memoryUsage}</td>
@@ -566,10 +600,22 @@ function UpdateBadge({ status }: { status: ProjectStatus["updateStatus"] }) {
   return <span className={`badge ${status}`}>{labels[status]}</span>;
 }
 
-function RuntimeBadge({ running }: { running: boolean }) {
-  return <span className={`runtime ${running ? "running" : "stopped"}`}>
-    <i />{running ? "运行中" : "未运行"}
-  </span>;
+function RuntimeBadge({ status }: { status: RuntimeStatus | string }) {
+  const labels: Record<string, string> = {
+    running: "运行中",
+    paused: "已暂停",
+    restarting: "重启中",
+    stopped: "未运行",
+    exited: "未运行",
+    created: "未启动",
+    missing: "不存在",
+    unknown: "未知"
+  };
+  return (
+    <span className={`runtime ${status}`}>
+      <i />{labels[status] ?? status}
+    </span>
+  );
 }
 
 function TaskIcon({ status }: { status: UpdateTask["status"] }) {
