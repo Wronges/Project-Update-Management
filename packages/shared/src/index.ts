@@ -27,7 +27,13 @@ export type UpdateStatus =
   | "updating"
   | "failed";
 
-export type RuntimeStatus = "running" | "stopped" | "missing" | "unknown";
+export type RuntimeStatus =
+  | "running"
+  | "stopped"
+  | "paused"
+  | "restarting"
+  | "missing"
+  | "unknown";
 
 export interface ProjectStatus extends ProjectDefinition {
   runtimeStatus: RuntimeStatus;

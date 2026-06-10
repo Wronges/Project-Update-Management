@@ -12,6 +12,8 @@ services:
       PUM_DATABASE: /app/data/project-update.db
       PUM_WEB_ROOT: /app/apps/web/dist
       PUM_ADMIN_TOKEN: ${PUM_ADMIN_TOKEN:?PUM_ADMIN_TOKEN is required}
+      PUM_TIME_ZONE: ${PUM_TIME_ZONE:-Asia/Shanghai}
+      PUM_ROLLBACK_ON_FAILURE: ${PUM_ROLLBACK_ON_FAILURE:-true}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt:/opt:ro

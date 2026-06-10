@@ -7,32 +7,94 @@ import type {
 } from "@pum/shared";
 import { DockerAdapter } from "./docker.js";
 import { TaskDatabase } from "./database.js";
+import { ProjectConflictError, ProjectNotFoundError } from "./errors.js";
+
+type DockerClient = Pick<
+  DockerAdapter,
+  | "runtimeStatuses"
+  | "runtimeStatus"
+  | "containerImageId"
+  | "taggedImageId"
+  | "pull"
+  | "recreate"
+  | "rollback"
+>;
+
+type TaskStore = Pick<
+  TaskDatabase,
+  "create" | "update" | "list" | "latestForProject"
+>;
+
+interface ProjectServiceOptions {
+  healthHostAlias?: string;
+  timeZone?: string;
+  rollbackOnFailure?: boolean;
+  fetcher?: typeof fetch;
+  wait?: (milliseconds: number) => Promise<void>;
+  now?: () => Date;
+}
 
 export class ProjectService {
   private readonly locks = new Set<string>();
   private readonly statuses = new Map<string, ProjectStatus>();
+  private readonly healthHostAlias: string;
+  private readonly timeZone: string;
+  private readonly rollbackOnFailure: boolean;
+  private readonly fetcher: typeof fetch;
+  private readonly wait: (milliseconds: number) => Promise<void>;
+  private readonly now: () => Date;
+  private runtimeRefreshPromise: Promise<void> | null = null;
 
   constructor(
     private readonly projects: ProjectDefinition[],
-    private readonly docker: DockerAdapter,
-    private readonly tasks: TaskDatabase
-  ) {}
+    private readonly docker: DockerClient,
+    private readonly tasks: TaskStore,
+    options: ProjectServiceOptions = {}
+  ) {
+    this.healthHostAlias = options.healthHostAlias ?? "";
+    this.timeZone = options.timeZone ?? "Asia/Shanghai";
+    this.rollbackOnFailure = options.rollbackOnFailure ?? true;
+    this.fetcher = options.fetcher ?? fetch;
+    this.wait = options.wait ?? wait;
+    this.now = options.now ?? (() => new Date());
+  }
 
   async initialize(): Promise<void> {
     await Promise.all(this.projects.map((project) => this.refreshRuntime(project)));
   }
 
   async refreshRuntimeStatuses(): Promise<void> {
+    if (this.runtimeRefreshPromise) return this.runtimeRefreshPromise;
+    this.runtimeRefreshPromise = this.refreshRuntimeStatusesOnce();
+    try {
+      await this.runtimeRefreshPromise;
+    } finally {
+      this.runtimeRefreshPromise = null;
+    }
+  }
+
+  private async refreshRuntimeStatusesOnce(): Promise<void> {
     const runtimeStatuses = await this.docker.runtimeStatuses();
 
-    for (const project of this.projects) {
-      if (this.locks.has(project.id)) continue;
-      const current = this.getStatus(project);
-      this.statuses.set(project.id, {
-        ...current,
-        runtimeStatus: runtimeStatuses.get(project.containerName) ?? "missing"
-      });
-    }
+    await Promise.all(
+      this.projects.map(async (project) => {
+        if (this.locks.has(project.id)) return;
+        const current = this.getStatus(project);
+        const runningImageId = await this.docker.containerImageId(
+          project.containerName
+        );
+        this.statuses.set(project.id, {
+          ...current,
+          runtimeStatus: runtimeStatuses.get(project.containerName) ?? "missing",
+          runningImageId,
+          updateStatus: resolveUpdateStatus(
+            runningImageId,
+            current.latestImageId,
+            current.updateStatus
+          )
+        });
+      })
+    );
   }
 
   list(): ProjectStatus[] {
@@ -45,14 +107,15 @@ export class ProjectService {
 
   summary(): DashboardSummary {
     const projects = this.list();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = dateInTimeZone(this.now(), this.timeZone);
     const updatedTodayCount = this.tasks
       .list(200)
       .filter(
         (task) =>
           task.kind === "update" &&
           task.status === "succeeded" &&
-          task.finishedAt?.startsWith(today)
+          task.finishedAt &&
+          dateInTimeZone(new Date(task.finishedAt), this.timeZone) === today
       ).length;
 
     return {
@@ -73,12 +136,14 @@ export class ProjectService {
   createTask(projectId: string, kind: UpdateTask["kind"]): UpdateTask {
     const project = this.requireProject(projectId);
     if (kind === "update" && project.updateStrategy === "manual") {
-      throw new Error(
+      throw new ProjectConflictError(
         project.manualUpdateNote ?? `Project ${projectId} requires a manual update`
       );
     }
     if (this.locks.has(projectId)) {
-      throw new Error(`Project ${projectId} already has an active task`);
+      throw new ProjectConflictError(
+        `Project ${projectId} already has an active task`
+      );
     }
 
     const now = new Date().toISOString();
@@ -97,7 +162,9 @@ export class ProjectService {
     };
     this.tasks.create(task);
     this.locks.add(projectId);
-    void this.execute(project, task);
+    void this.execute(project, task).catch(() => {
+      this.locks.delete(project.id);
+    });
     return task;
   }
 
@@ -105,20 +172,32 @@ export class ProjectService {
     project: ProjectDefinition,
     task: UpdateTask
   ): Promise<void> {
-    task.status = "running";
-    task.startedAt = new Date().toISOString();
-    this.setOperationStatus(project, task.kind);
-    this.tasks.update(task);
+    let deploymentStarted = false;
 
     try {
+      task.status = "running";
+      task.startedAt = new Date().toISOString();
+      this.setOperationStatus(project, task.kind);
+      this.tasks.update(task);
+
+      if (task.kind === "check" && project.updateStrategy === "manual") {
+        await this.refreshRuntime(project);
+        task.nextImageId = this.getStatus(project).latestImageId;
+        task.status = "succeeded";
+        return;
+      }
+
       const pull = await this.docker.pull(project);
       appendLog(task, "pull", pull.stdout, pull.stderr);
       task.nextImageId = await this.docker.taggedImageId(project.image);
+      this.tasks.update(task);
 
       if (task.kind === "update") {
+        deploymentStarted = true;
         const recreate = await this.docker.recreate(project);
         appendLog(task, "recreate", recreate.stdout, recreate.stderr);
-        await wait(3000);
+        this.tasks.update(task);
+        await this.wait(3000);
         await this.verifyHealth(project);
       }
 
@@ -128,6 +207,14 @@ export class ProjectService {
       task.status = "failed";
       task.error = error instanceof Error ? error.message : String(error);
       task.log += `\n[error]\n${task.error}\n`;
+      if (
+        deploymentStarted &&
+        this.rollbackOnFailure &&
+        task.previousImageId &&
+        task.previousImageId !== task.nextImageId
+      ) {
+        await this.tryRollback(project, task);
+      }
       const current = this.getStatus(project);
       this.statuses.set(project.id, {
         ...current,
@@ -136,8 +223,31 @@ export class ProjectService {
       });
     } finally {
       task.finishedAt = new Date().toISOString();
-      this.tasks.update(task);
-      this.locks.delete(project.id);
+      try {
+        this.tasks.update(task);
+      } finally {
+        this.locks.delete(project.id);
+      }
+    }
+  }
+
+  private async tryRollback(
+    project: ProjectDefinition,
+    task: UpdateTask
+  ): Promise<void> {
+    try {
+      const rollback = await this.docker.rollback(
+        project,
+        task.previousImageId as string
+      );
+      appendLog(task, "rollback", rollback.stdout, rollback.stderr);
+      await this.wait(3000);
+      await this.verifyHealth(project);
+      await this.refreshRuntime(project);
+    } catch (rollbackError) {
+      const message =
+        rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      task.log += `\n[rollback-error]\n${message}\n`;
     }
   }
 
@@ -146,13 +256,13 @@ export class ProjectService {
 
     const healthUrl = rewriteHealthHost(
       project.healthUrl,
-      process.env.PUM_HEALTH_HOST_ALIAS ?? ""
+      this.healthHostAlias
     );
     let lastError = "health check failed";
 
     for (let attempt = 1; attempt <= 10; attempt += 1) {
       try {
-        const response = await fetch(healthUrl, {
+        const response = await this.fetcher(healthUrl, {
           signal: AbortSignal.timeout(5000)
         });
         if (response.ok) return;
@@ -160,7 +270,7 @@ export class ProjectService {
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
       }
-      await wait(2000);
+      await this.wait(2000);
     }
 
     throw new Error(lastError);
@@ -225,7 +335,7 @@ export class ProjectService {
   private requireProject(projectId: string): ProjectDefinition {
     const project = this.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
-      throw new Error(`Unknown project: ${projectId}`);
+      throw new ProjectNotFoundError(projectId);
     }
     return project;
   }
@@ -251,4 +361,25 @@ function rewriteHealthHost(url: string, alias: string): string {
     parsed.hostname = alias;
   }
   return parsed.toString();
+}
+
+function resolveUpdateStatus(
+  runningImageId: string | null,
+  latestImageId: string | null,
+  currentStatus: ProjectStatus["updateStatus"]
+): ProjectStatus["updateStatus"] {
+  if (currentStatus === "checking" || currentStatus === "updating") {
+    return currentStatus;
+  }
+  if (!runningImageId || !latestImageId) return "unknown";
+  return runningImageId === latestImageId ? "latest" : "update_available";
+}
+
+function dateInTimeZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
 }

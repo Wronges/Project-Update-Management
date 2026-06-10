@@ -26,6 +26,7 @@ export class TaskDatabase {
       CREATE INDEX IF NOT EXISTS idx_update_tasks_project_created
       ON update_tasks(project_id, created_at DESC);
     `);
+    this.recoverInterruptedTasks();
   }
 
   create(task: UpdateTask): void {
@@ -80,21 +81,66 @@ export class TaskDatabase {
 
   list(limit = 50): UpdateTask[] {
     const rows = this.database
-      .prepare("SELECT * FROM update_tasks ORDER BY created_at DESC LIMIT ?")
+      .prepare(`
+        SELECT
+          id, project_id, kind, status, previous_image_id, next_image_id,
+          started_at, finished_at, created_at, error, '' AS log
+        FROM update_tasks
+        ORDER BY created_at DESC
+        LIMIT ?
+      `)
       .all(limit) as unknown as TaskRow[];
+    return rows.map(mapTask);
+  }
+
+  listForProject(projectId: string, limit = 20): UpdateTask[] {
+    const rows = this.database
+      .prepare(`
+        SELECT
+          id, project_id, kind, status, previous_image_id, next_image_id,
+          started_at, finished_at, created_at, error, '' AS log
+        FROM update_tasks
+        WHERE project_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `)
+      .all(projectId, limit) as unknown as TaskRow[];
     return rows.map(mapTask);
   }
 
   latestForProject(projectId: string): UpdateTask | null {
     const row = this.database
       .prepare(`
-        SELECT * FROM update_tasks
+        SELECT
+          id, project_id, kind, status, previous_image_id, next_image_id,
+          started_at, finished_at, created_at, error, '' AS log
+        FROM update_tasks
         WHERE project_id = ?
         ORDER BY created_at DESC
         LIMIT 1
       `)
       .get(projectId) as TaskRow | undefined;
     return row ? mapTask(row) : null;
+  }
+
+  close(): void {
+    this.database.close();
+  }
+
+  private recoverInterruptedTasks(): void {
+    const now = new Date().toISOString();
+    this.database
+      .prepare(`
+        UPDATE update_tasks
+        SET
+          status = 'failed',
+          finished_at = ?,
+          error = 'interrupted by restart',
+          log = log || CASE WHEN log = '' THEN '' ELSE char(10) END ||
+            '[error]' || char(10) || 'interrupted by restart' || char(10)
+        WHERE status IN ('queued', 'running')
+      `)
+      .run(now);
   }
 }
 
@@ -127,4 +173,3 @@ function mapTask(row: TaskRow): UpdateTask {
     log: row.log
   };
 }
-

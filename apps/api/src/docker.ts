@@ -26,7 +26,7 @@ export class DockerAdapter {
       if (separator < 0) continue;
       const name = line.slice(0, separator);
       const state = line.slice(separator + 1);
-      statuses.set(name, state === "running" ? "running" : "stopped");
+      statuses.set(name, mapRuntimeStatus(state));
     }
 
     return statuses;
@@ -69,7 +69,7 @@ export class DockerAdapter {
         "--format",
         "{{.State.Status}}"
       ]);
-      return result.stdout.trim() === "running" ? "running" : "stopped";
+      return mapRuntimeStatus(result.stdout.trim());
     } catch {
       return "missing";
     }
@@ -84,6 +84,21 @@ export class DockerAdapter {
       "up",
       "-d",
       "--force-recreate",
+      project.composeService
+    ]);
+  }
+
+  async rollback(
+    project: ProjectDefinition,
+    previousImageId: string
+  ): Promise<CommandResult> {
+    await this.run("docker", ["image", "tag", previousImageId, project.image]);
+    return this.compose(project, [
+      "up",
+      "-d",
+      "--force-recreate",
+      "--pull",
+      "never",
       project.composeService
     ]);
   }
@@ -110,4 +125,11 @@ export class DockerAdapter {
       stderr: result.stderr
     };
   }
+}
+
+function mapRuntimeStatus(state: string): RuntimeStatus {
+  if (state === "running" || state === "paused" || state === "restarting") {
+    return state;
+  }
+  return "stopped";
 }

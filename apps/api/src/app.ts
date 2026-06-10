@@ -1,17 +1,17 @@
-import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appConfig } from "./config.js";
 import { TaskDatabase } from "./database.js";
 import { DockerAdapter } from "./docker.js";
+import { ProjectConflictError, ProjectNotFoundError } from "./errors.js";
 import { loadInventory } from "./inventory.js";
 import { ProjectService } from "./project-service.js";
 import { collectServerStatus } from "./server-status.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
-  await app.register(cors, { origin: true });
   if (existsSync(appConfig.webRoot)) {
     await app.register(fastifyStatic, {
       root: appConfig.webRoot,
@@ -21,7 +21,12 @@ export async function buildApp() {
 
   const inventory = await loadInventory(appConfig.inventoryPath);
   const tasks = new TaskDatabase(appConfig.databasePath);
-  const projects = new ProjectService(inventory, new DockerAdapter(), tasks);
+  app.addHook("onClose", async () => tasks.close());
+  const projects = new ProjectService(inventory, new DockerAdapter(), tasks, {
+    healthHostAlias: appConfig.healthHostAlias,
+    timeZone: appConfig.timeZone,
+    rollbackOnFailure: appConfig.rollbackOnFailure
+  });
   await projects.initialize();
 
   app.addHook("preHandler", async (request, reply) => {
@@ -31,7 +36,7 @@ export async function buildApp() {
         error: "PUM_ADMIN_TOKEN is not configured; update operations are disabled"
       });
     }
-    if (request.headers["x-pum-token"] !== appConfig.adminToken) {
+    if (!tokensEqual(request.headers["x-pum-token"], appConfig.adminToken)) {
       return reply.code(401).send({ error: "Invalid administrator token" });
     }
   });
@@ -53,25 +58,27 @@ export async function buildApp() {
     await projects.refreshRuntimeStatuses();
     return projects.list();
   });
-  app.get<{ Params: { id: string } }>("/api/projects/:id", async (request) => {
-    await projects.refreshRuntimeStatuses();
-    return {
-      project: projects.get(request.params.id),
-      history: tasks
-        .list(200)
-        .filter((task) => task.projectId === request.params.id)
-        .slice(0, 20)
-    };
-  });
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id",
+    async (request, reply) => {
+      try {
+        await projects.refreshRuntimeStatuses();
+        return {
+          project: projects.get(request.params.id),
+          history: tasks.listForProject(request.params.id, 20)
+        };
+      } catch (error) {
+        return sendProjectError(reply, error);
+      }
+    }
+  );
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/check",
     async (request, reply) => {
       try {
         return reply.code(202).send(projects.createTask(request.params.id, "check"));
       } catch (error) {
-        return reply.code(409).send({
-          error: error instanceof Error ? error.message : String(error)
-        });
+        return sendProjectError(reply, error);
       }
     }
   );
@@ -83,9 +90,7 @@ export async function buildApp() {
           .code(202)
           .send(projects.createTask(request.params.id, "update"));
       } catch (error) {
-        return reply.code(409).send({
-          error: error instanceof Error ? error.message : String(error)
-        });
+        return sendProjectError(reply, error);
       }
     }
   );
@@ -104,4 +109,31 @@ export async function buildApp() {
   }
 
   return app;
+}
+
+function tokensEqual(
+  provided: string | string[] | undefined,
+  expected: string
+): boolean {
+  if (typeof provided !== "string") return false;
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    providedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedBuffer)
+  );
+}
+
+function sendProjectError(
+  reply: { code(statusCode: number): { send(payload: object): unknown } },
+  error: unknown
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof ProjectNotFoundError) {
+    return reply.code(404).send({ error: message });
+  }
+  if (error instanceof ProjectConflictError) {
+    return reply.code(409).send({ error: message });
+  }
+  throw error;
 }
