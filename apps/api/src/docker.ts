@@ -4,21 +4,28 @@ import type { ProjectDefinition, RuntimeStatus } from "@pum/shared";
 
 const execFileAsync = promisify(execFile);
 const maxBuffer = 10 * 1024 * 1024;
+const queryTimeoutMs = 15_000;
+const composeTimeoutMs = 10 * 60_000;
 
 export interface CommandResult {
   stdout: string;
   stderr: string;
 }
 
+export interface RuntimeSnapshot {
+  status: RuntimeStatus;
+  imageId: string | null;
+}
+
 export class DockerAdapter {
-  async runtimeStatuses(): Promise<Map<string, RuntimeStatus>> {
+  async runtimeSnapshots(): Promise<Map<string, RuntimeSnapshot>> {
     const result = await this.run("docker", [
       "ps",
       "-a",
       "--format",
       "{{.Names}}|{{.State}}"
     ]);
-    const statuses = new Map<string, RuntimeStatus>();
+    const snapshots = new Map<string, RuntimeSnapshot>();
 
     for (const line of result.stdout.split(/\r?\n/)) {
       if (!line) continue;
@@ -26,10 +33,38 @@ export class DockerAdapter {
       if (separator < 0) continue;
       const name = line.slice(0, separator);
       const state = line.slice(separator + 1);
-      statuses.set(name, mapRuntimeStatus(state));
+      snapshots.set(name, {
+        status: mapRuntimeStatus(state),
+        imageId: null
+      });
     }
 
-    return statuses;
+    const names = [...snapshots.keys()];
+    if (!names.length) return snapshots;
+
+    let inspectOutput = "";
+    try {
+      const inspect = await this.run("docker", [
+        "inspect",
+        "--format",
+        "{{.Name}}|{{.Image}}",
+        ...names
+      ]);
+      inspectOutput = inspect.stdout;
+    } catch (error) {
+      inspectOutput = commandOutput(error);
+      if (!inspectOutput) throw error;
+    }
+    for (const line of inspectOutput.split(/\r?\n/)) {
+      if (!line) continue;
+      const separator = line.lastIndexOf("|");
+      if (separator < 0) continue;
+      const name = line.slice(0, separator).replace(/^\//, "");
+      const snapshot = snapshots.get(name);
+      if (snapshot) snapshot.imageId = line.slice(separator + 1) || null;
+    }
+
+    return snapshots;
   }
 
   async containerImageId(containerName: string): Promise<string | null> {
@@ -76,16 +111,15 @@ export class DockerAdapter {
   }
 
   pull(project: ProjectDefinition): Promise<CommandResult> {
-    return this.compose(project, ["pull", project.composeService]);
+    return this.compose(project, ["pull", project.composeService], composeTimeoutMs);
   }
 
   recreate(project: ProjectDefinition): Promise<CommandResult> {
-    return this.compose(project, [
-      "up",
-      "-d",
-      "--force-recreate",
-      project.composeService
-    ]);
+    return this.compose(
+      project,
+      ["up", "-d", "--force-recreate", project.composeService],
+      composeTimeoutMs
+    );
   }
 
   async rollback(
@@ -93,32 +127,44 @@ export class DockerAdapter {
     previousImageId: string
   ): Promise<CommandResult> {
     await this.run("docker", ["image", "tag", previousImageId, project.image]);
-    return this.compose(project, [
-      "up",
-      "-d",
-      "--force-recreate",
-      "--pull",
-      "never",
-      project.composeService
-    ]);
+    return this.compose(
+      project,
+      [
+        "up",
+        "-d",
+        "--force-recreate",
+        "--pull",
+        "never",
+        project.composeService
+      ],
+      composeTimeoutMs
+    );
   }
 
   private compose(
     project: ProjectDefinition,
-    args: string[]
+    args: string[],
+    timeout = queryTimeoutMs
   ): Promise<CommandResult> {
-    return this.run("docker", ["compose", ...args], project.composeDirectory);
+    return this.run(
+      "docker",
+      ["compose", ...args],
+      project.composeDirectory,
+      timeout
+    );
   }
 
   private async run(
     executable: string,
     args: string[],
-    cwd?: string
+    cwd?: string,
+    timeout = queryTimeoutMs
   ): Promise<CommandResult> {
     const result = await execFileAsync(executable, args, {
       cwd,
       windowsHide: true,
-      maxBuffer
+      maxBuffer,
+      timeout
     });
     return {
       stdout: result.stdout,
@@ -132,4 +178,16 @@ function mapRuntimeStatus(state: string): RuntimeStatus {
     return state;
   }
   return "stopped";
+}
+
+function commandOutput(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "stdout" in error &&
+    typeof error.stdout === "string"
+  ) {
+    return error.stdout;
+  }
+  return "";
 }

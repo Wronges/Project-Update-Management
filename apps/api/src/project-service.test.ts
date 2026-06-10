@@ -137,11 +137,72 @@ describe("ProjectService", () => {
 
     expect(service.summary().updatedTodayCount).toBe(1);
   });
+
+  it("keeps a failed update status during runtime polling", async () => {
+    const docker = createDocker();
+    docker.pull.mockRejectedValue(new Error("registry unavailable"));
+    docker.runtimeSnapshots.mockResolvedValue(
+      new Map([
+        [
+          imageProject.containerName,
+          { status: "running" as RuntimeStatus, imageId: "sha256:current" }
+        ]
+      ])
+    );
+    let now = Date.now();
+    const tasks = createTaskStore();
+    const service = new ProjectService([imageProject], docker, tasks, {
+      now: () => new Date(now)
+    });
+    await service.initialize();
+
+    const task = service.createTask(imageProject.id, "update");
+    await waitFor(() => task.status === "failed");
+    now += 5_000;
+    await service.refreshRuntimeStatuses();
+
+    expect(service.get(imageProject.id).updateStatus).toBe("failed");
+    expect(service.summary().failedCount).toBe(1);
+  });
+
+  it("reuses runtime snapshots within the refresh TTL", async () => {
+    const docker = createDocker();
+    docker.runtimeSnapshots.mockResolvedValue(
+      new Map([
+        [
+          imageProject.containerName,
+          { status: "running" as RuntimeStatus, imageId: "sha256:current" }
+        ]
+      ])
+    );
+    let now = Date.now();
+    const service = new ProjectService(
+      [imageProject],
+      docker,
+      createTaskStore(),
+      { now: () => new Date(now) }
+    );
+    await service.initialize();
+
+    await service.refreshRuntimeStatuses();
+    await service.refreshRuntimeStatuses();
+    expect(docker.runtimeSnapshots).toHaveBeenCalledTimes(1);
+
+    now += 3_001;
+    await service.refreshRuntimeStatuses();
+    expect(docker.runtimeSnapshots).toHaveBeenCalledTimes(2);
+  });
 });
 
 function createDocker() {
   return {
-    runtimeStatuses: vi.fn(async () => new Map<string, RuntimeStatus>()),
+    runtimeSnapshots: vi.fn(
+      async () =>
+        new Map<
+          string,
+          { status: RuntimeStatus; imageId: string | null }
+        >()
+    ),
     runtimeStatus: vi.fn(async () => "running" as RuntimeStatus),
     containerImageId: vi.fn(async () => "sha256:current"),
     taggedImageId: vi.fn(async () => "sha256:current"),

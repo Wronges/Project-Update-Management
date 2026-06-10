@@ -10,6 +10,11 @@ import type {
 
 const execFileAsync = promisify(execFile);
 const maxBuffer = 10 * 1024 * 1024;
+const dockerTimeoutMs = 15_000;
+const cacheTtlMs = 3_000;
+let cachedStatus: ServerStatusPayload | null = null;
+let cachedAt = 0;
+let collectionPromise: Promise<ServerStatusPayload> | null = null;
 
 interface DockerStatsRow {
   ID?: string;
@@ -30,6 +35,20 @@ interface DockerPsRow {
 }
 
 export async function collectServerStatus(): Promise<ServerStatusPayload> {
+  const now = Date.now();
+  if (cachedStatus && now - cachedAt < cacheTtlMs) return cachedStatus;
+  if (collectionPromise) return collectionPromise;
+  collectionPromise = collectServerStatusOnce();
+  try {
+    cachedStatus = await collectionPromise;
+    cachedAt = Date.now();
+    return cachedStatus;
+  } finally {
+    collectionPromise = null;
+  }
+}
+
+async function collectServerStatusOnce(): Promise<ServerStatusPayload> {
   const [statsResult, psResult] = await Promise.all([
     runDocker(["stats", "--all", "--no-stream", "--format", "{{json .}}"]),
     runDocker(["ps", "-a", "--no-trunc", "--format", "{{json .}}"])
@@ -120,6 +139,7 @@ function roundPercent(value: number): number {
 async function runDocker(args: string[]) {
   return execFileAsync("docker", args, {
     windowsHide: true,
-    maxBuffer
+    maxBuffer,
+    timeout: dockerTimeoutMs
   });
 }

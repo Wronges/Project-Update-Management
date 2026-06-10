@@ -108,15 +108,17 @@ export function App() {
     projectId: string,
     action: "check" | "update",
     waitForCompletion = false
-  ) {
+  ): Promise<boolean> {
     setActionIds((current) => new Set(current).add(projectId));
     try {
       const task = await createTaskWithTokenRetry(projectId, action);
-      if (!task) return;
+      if (!task) return false;
       if (waitForCompletion) await waitForTask(task.id);
       await loadDashboard();
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
     } finally {
       setActionIds((current) => {
         const next = new Set(current);
@@ -133,7 +135,8 @@ export function App() {
     if (!ids.length) return;
     if (!window.confirm(`确定依次更新 ${ids.length} 个项目吗？`)) return;
     for (const id of ids) {
-      await runAction(id, "update", true);
+      const succeeded = await runAction(id, "update", true);
+      if (!succeeded) break;
     }
   }
 
@@ -171,7 +174,8 @@ export function App() {
   }
 
   async function waitForTask(taskId: string): Promise<void> {
-    for (;;) {
+    const deadline = Date.now() + 25 * 60_000;
+    while (Date.now() < deadline) {
       const response = await fetch(`/api/tasks/${taskId}`);
       if (!response.ok) throw new Error("无法读取任务状态");
       const task = (await response.json()) as UpdateTask;
@@ -181,6 +185,7 @@ export function App() {
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
     }
+    throw new Error("等待任务完成超时，请在更新历史中检查最终结果");
   }
 
   return (

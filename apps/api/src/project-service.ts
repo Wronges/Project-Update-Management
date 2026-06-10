@@ -11,7 +11,7 @@ import { ProjectConflictError, ProjectNotFoundError } from "./errors.js";
 
 type DockerClient = Pick<
   DockerAdapter,
-  | "runtimeStatuses"
+  | "runtimeSnapshots"
   | "runtimeStatus"
   | "containerImageId"
   | "taggedImageId"
@@ -44,6 +44,7 @@ export class ProjectService {
   private readonly wait: (milliseconds: number) => Promise<void>;
   private readonly now: () => Date;
   private runtimeRefreshPromise: Promise<void> | null = null;
+  private runtimeRefreshedAt = 0;
 
   constructor(
     private readonly projects: ProjectDefinition[],
@@ -64,6 +65,7 @@ export class ProjectService {
   }
 
   async refreshRuntimeStatuses(): Promise<void> {
+    if (this.now().getTime() - this.runtimeRefreshedAt < 3000) return;
     if (this.runtimeRefreshPromise) return this.runtimeRefreshPromise;
     this.runtimeRefreshPromise = this.refreshRuntimeStatusesOnce();
     try {
@@ -74,27 +76,25 @@ export class ProjectService {
   }
 
   private async refreshRuntimeStatusesOnce(): Promise<void> {
-    const runtimeStatuses = await this.docker.runtimeStatuses();
+    const runtimeSnapshots = await this.docker.runtimeSnapshots();
 
-    await Promise.all(
-      this.projects.map(async (project) => {
-        if (this.locks.has(project.id)) return;
-        const current = this.getStatus(project);
-        const runningImageId = await this.docker.containerImageId(
-          project.containerName
-        );
-        this.statuses.set(project.id, {
-          ...current,
-          runtimeStatus: runtimeStatuses.get(project.containerName) ?? "missing",
+    for (const project of this.projects) {
+      if (this.locks.has(project.id)) continue;
+      const current = this.getStatus(project);
+      const snapshot = runtimeSnapshots.get(project.containerName);
+      const runningImageId = snapshot?.imageId ?? null;
+      this.statuses.set(project.id, {
+        ...current,
+        runtimeStatus: snapshot?.status ?? "missing",
+        runningImageId,
+        updateStatus: resolveUpdateStatus(
           runningImageId,
-          updateStatus: resolveUpdateStatus(
-            runningImageId,
-            current.latestImageId,
-            current.updateStatus
-          )
-        });
-      })
-    );
+          current.latestImageId,
+          current.updateStatus
+        )
+      });
+    }
+    this.runtimeRefreshedAt = this.now().getTime();
   }
 
   list(): ProjectStatus[] {
@@ -162,8 +162,9 @@ export class ProjectService {
     };
     this.tasks.create(task);
     this.locks.add(projectId);
-    void this.execute(project, task).catch(() => {
+    void this.execute(project, task).catch((error) => {
       this.locks.delete(project.id);
+      console.error(`Background task ${task.id} failed unexpectedly`, error);
     });
     return task;
   }
@@ -368,18 +369,29 @@ function resolveUpdateStatus(
   latestImageId: string | null,
   currentStatus: ProjectStatus["updateStatus"]
 ): ProjectStatus["updateStatus"] {
-  if (currentStatus === "checking" || currentStatus === "updating") {
+  if (
+    currentStatus === "checking" ||
+    currentStatus === "updating" ||
+    currentStatus === "failed"
+  ) {
     return currentStatus;
   }
   if (!runningImageId || !latestImageId) return "unknown";
   return runningImageId === latestImageId ? "latest" : "update_available";
 }
 
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
 function dateInTimeZone(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(date);
+  let formatter = dateFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    dateFormatters.set(timeZone, formatter);
+  }
+  return formatter.format(date);
 }
