@@ -17,6 +17,7 @@ import {
 import { useEffect, useEffectEvent, useState } from "react";
 import type {
   DashboardSummary,
+  ProjectReleasesPayload,
   ProjectStatus,
   RuntimeStatus,
   ServerStatusPayload,
@@ -320,8 +321,24 @@ export function App() {
                     <td className="project-name">{project.name}</td>
                     <td>{project.containerName}</td>
                     <td>{project.server}</td>
-                    <td className="hash">{shortId(project.runningImageId)}</td>
-                    <td className="hash">{shortId(project.latestImageId)}</td>
+                    <td
+                      className="hash image-version"
+                      title={imageTitle(
+                        project.runningImageId,
+                        project.runningImageCreatedAt
+                      )}
+                    >
+                      {project.runningVersion ?? shortId(project.runningImageId)}
+                    </td>
+                    <td
+                      className="hash image-version"
+                      title={imageTitle(
+                        project.latestImageId,
+                        project.latestImageCreatedAt
+                      )}
+                    >
+                      {project.latestVersion ?? shortId(project.latestImageId)}
+                    </td>
                     <td><UpdateBadge status={project.updateStatus} /></td>
                     <td><RuntimeBadge status={project.runtimeStatus} /></td>
                     <td>{formatRelativeTime(project.lastCheckedAt)}</td>
@@ -423,6 +440,7 @@ export function App() {
           {selected.manualUpdateNote && (
             <DetailRow label="更新说明">{selected.manualUpdateNote}</DetailRow>
           )}
+          <ReleaseNotesPanel project={selected} />
           <div className="detail-actions">
             <button
               className="button secondary"
@@ -667,9 +685,160 @@ function DetailRow({
   return <div className="detail-row"><span>{label}</span><div>{children}</div></div>;
 }
 
+function ReleaseNotesPanel({ project }: { project: ProjectStatus }) {
+  const [payload, setPayload] = useState<ProjectReleasesPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedTags, setExpandedTags] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setPayload(null);
+    setError(null);
+    setExpandedTags(new Set());
+    void fetch(`/api/projects/${project.id}/releases`, {
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("无法读取版本更新内容");
+        return response.json() as Promise<ProjectReleasesPayload>;
+      })
+      .then((result) => {
+        setPayload(result);
+        setError(result.error ?? null);
+      })
+      .catch((cause) => {
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [project.id]);
+
+  const latestRelease = payload?.releases[0];
+  const currentDisplay = versionOrBuildDate(
+    payload?.currentVersion ?? project.runningVersion,
+    project.runningImageCreatedAt
+  );
+  const latestDisplay = versionOrBuildDate(
+    payload?.latestLocalVersion ?? project.latestVersion,
+    project.latestImageCreatedAt
+  );
+
+  return (
+    <section className="release-section">
+      <div className="release-heading">
+        <span>版本与更新内容</span>
+        {payload?.stale && (
+          <small>缓存于 {formatTime(payload.fetchedAt)}</small>
+        )}
+      </div>
+      <div className="version-route">
+        <strong>{currentDisplay}</strong>
+        <span>→</span>
+        <strong>{latestDisplay}</strong>
+        {latestRelease?.publishedAt && (
+          <small>发布于 {formatRelativeTime(latestRelease.publishedAt)}</small>
+        )}
+      </div>
+
+      {loading && (
+        <div className="release-skeleton" aria-label="正在加载更新内容">
+          <i /><i /><i />
+        </div>
+      )}
+      {error && (
+        <div className="release-warning">
+          GitHub 暂不可达或触发限流
+          {payload?.stale ? "，当前显示缓存数据。" : "，更新功能不受影响。"}
+        </div>
+      )}
+      {!loading && payload && !payload.releases.length && (
+        <div className="release-empty">
+          暂无 Release Notes。
+          <a href={payload.repository} target="_blank" rel="noreferrer">
+            查看仓库 <ExternalLink size={12} />
+          </a>
+        </div>
+      )}
+      {!!payload?.releases.length && (
+        <div className="release-list">
+          {payload.releases.map((release) => {
+            const expanded = expandedTags.has(release.tagName);
+            const collapsible = release.body.length > 1200;
+            const body =
+              collapsible && !expanded
+                ? `${release.body.slice(0, 1200)}…`
+                : release.body;
+            return (
+              <article className="release-item" key={release.tagName}>
+                <div className="release-title">
+                  <div>
+                    <code>{release.tagName}</code>
+                    {release.isNewerThanCurrent === true && (
+                      <em>新</em>
+                    )}
+                  </div>
+                  {release.publishedAt && (
+                    <time>{formatTime(release.publishedAt)}</time>
+                  )}
+                </div>
+                <h3>{release.name}</h3>
+                {body && <pre>{body}</pre>}
+                <div className="release-links">
+                  {collapsible && (
+                    <button
+                      onClick={() =>
+                        setExpandedTags((current) => {
+                          const next = new Set(current);
+                          if (expanded) next.delete(release.tagName);
+                          else next.add(release.tagName);
+                          return next;
+                        })
+                      }
+                    >
+                      {expanded ? "收起" : "展开"}
+                    </button>
+                  )}
+                  <a href={release.htmlUrl} target="_blank" rel="noreferrer">
+                    在 GitHub 查看 <ExternalLink size={12} />
+                  </a>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+      <p className="release-note">
+        更新内容来自 GitHub Releases，实际拉取版本取决于镜像标签。
+      </p>
+    </section>
+  );
+}
+
 function shortId(value: string | null): string {
   if (!value) return "—";
   return value.replace("sha256:", "").slice(0, 12);
+}
+
+function imageTitle(imageId: string | null, createdAt: string | null): string {
+  return [
+    imageId ? `镜像 ID：${imageId}` : "镜像 ID：未知",
+    createdAt ? `构建时间：${formatFullTime(createdAt)}` : "构建时间：未知"
+  ].join("\n");
+}
+
+function versionOrBuildDate(
+  version: string | null | undefined,
+  createdAt: string | null
+): string {
+  if (version) return version;
+  return createdAt ? `构建于 ${formatDate(createdAt)}` : "版本未知";
 }
 
 function formatTime(value: string): string {
@@ -678,6 +847,24 @@ function formatTime(value: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function formatFullTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
   }).format(new Date(value));
 }
 

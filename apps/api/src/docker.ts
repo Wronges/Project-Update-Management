@@ -17,6 +17,13 @@ export interface RuntimeSnapshot {
   imageId: string | null;
 }
 
+export interface ImageInfo {
+  id: string;
+  createdAt: string;
+  version: string | null;
+  revision: string | null;
+}
+
 export class DockerAdapter {
   async runtimeSnapshots(): Promise<Map<string, RuntimeSnapshot>> {
     const result = await this.run("docker", [
@@ -91,6 +98,21 @@ export class DockerAdapter {
         "{{.Id}}"
       ]);
       return result.stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async imageInfo(ref: string): Promise<ImageInfo | null> {
+    try {
+      const result = await this.run("docker", [
+        "image",
+        "inspect",
+        ref,
+        "--format",
+        "{{.Id}}\t{{.Created}}\t{{json .Config.Labels}}"
+      ]);
+      return parseImageInfoOutput(result.stdout);
     } catch {
       return null;
     }
@@ -171,6 +193,41 @@ export class DockerAdapter {
       stderr: result.stderr
     };
   }
+}
+
+export function parseImageInfoOutput(output: string): ImageInfo | null {
+  const line = output.trim();
+  const firstSeparator = line.indexOf("\t");
+  const secondSeparator = line.indexOf("\t", firstSeparator + 1);
+  if (firstSeparator < 1 || secondSeparator < 0) return null;
+
+  const id = line.slice(0, firstSeparator);
+  const createdAt = line.slice(firstSeparator + 1, secondSeparator);
+  const labelsText = line.slice(secondSeparator + 1);
+  let labels: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = JSON.parse(labelsText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      labels = parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+
+  return {
+    id,
+    createdAt,
+    version: labelValue(labels, "org.opencontainers.image.version"),
+    revision: labelValue(labels, "org.opencontainers.image.revision")
+  };
+}
+
+function labelValue(
+  labels: Record<string, unknown> | null,
+  key: string
+): string | null {
+  const value = labels?.[key];
+  return typeof value === "string" && value ? value : null;
 }
 
 function mapRuntimeStatus(state: string): RuntimeStatus {

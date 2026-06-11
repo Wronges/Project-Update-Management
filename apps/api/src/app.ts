@@ -1,5 +1,6 @@
 import fastifyStatic from "@fastify/static";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
+import type { ProjectStatus } from "@pum/shared";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appConfig } from "./config.js";
@@ -8,6 +9,11 @@ import { DockerAdapter } from "./docker.js";
 import { ProjectConflictError, ProjectNotFoundError } from "./errors.js";
 import { loadInventory } from "./inventory.js";
 import { ProjectService } from "./project-service.js";
+import {
+  markNewerReleases,
+  ReleaseNotesService,
+  type ReleaseNotesResult
+} from "./release-notes.js";
 import { ProjectCheckScheduler } from "./scheduler.js";
 import { collectServerStatus } from "./server-status.js";
 
@@ -28,6 +34,9 @@ export async function buildApp() {
     rollbackOnFailure: appConfig.rollbackOnFailure
   });
   await projects.initialize();
+  const releaseNotes = new ReleaseNotesService({
+    token: appConfig.githubToken
+  });
   const scheduler = new ProjectCheckScheduler(projects, tasks, {
     intervalMinutes: appConfig.checkIntervalMinutes,
     logger: app.log
@@ -67,6 +76,7 @@ export async function buildApp() {
     await projects.refreshRuntimeStatuses();
     return projects.list();
   });
+  registerProjectReleaseRoute(app, projects, releaseNotes);
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id",
     async (request, reply) => {
@@ -120,6 +130,38 @@ export async function buildApp() {
   }
 
   return app;
+}
+
+interface ProjectReader {
+  get(projectId: string): ProjectStatus;
+}
+
+interface ReleaseNotesReader {
+  get(repository: string): Promise<ReleaseNotesResult>;
+}
+
+export function registerProjectReleaseRoute(
+  app: FastifyInstance,
+  projects: ProjectReader,
+  releaseNotes: ReleaseNotesReader
+): void {
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/releases",
+    async (request, reply) => {
+      try {
+        const project = projects.get(request.params.id);
+        const result = await releaseNotes.get(project.repository);
+        return {
+          ...result,
+          currentVersion: project.runningVersion,
+          latestLocalVersion: project.latestVersion,
+          releases: markNewerReleases(result.releases, project.runningVersion)
+        };
+      } catch (error) {
+        return sendProjectError(reply, error);
+      }
+    }
+  );
 }
 
 function tokensEqual(

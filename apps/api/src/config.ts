@@ -19,6 +19,7 @@ export const appConfig = {
   databasePath: resolveFromRoot(process.env.PUM_DATABASE ?? "./data/project-update.db"),
   webRoot: resolveFromRoot(process.env.PUM_WEB_ROOT ?? "./apps/web/dist"),
   adminToken: process.env.PUM_ADMIN_TOKEN ?? "",
+  githubToken: process.env.PUM_GITHUB_TOKEN ?? "",
   healthHostAlias: process.env.PUM_HEALTH_HOST_ALIAS ?? "",
   timeZone: process.env.PUM_TIME_ZONE ?? "Asia/Shanghai",
   rollbackOnFailure: process.env.PUM_ROLLBACK_ON_FAILURE !== "false",

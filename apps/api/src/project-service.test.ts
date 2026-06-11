@@ -207,6 +207,12 @@ function createDocker() {
     runtimeStatus: vi.fn(async () => "running" as RuntimeStatus),
     containerImageId: vi.fn(async () => "sha256:current"),
     taggedImageId: vi.fn(async () => "sha256:current"),
+    imageInfo: vi.fn(async (ref: string) => ({
+      id: ref,
+      createdAt: "2026-06-01T00:00:00Z",
+      version: "1.0.0",
+      revision: null
+    })),
     pull: vi.fn(async () => ({ stdout: "", stderr: "" })),
     recreate: vi.fn(async () => ({ stdout: "", stderr: "" })),
     rollback: vi.fn(async () => ({ stdout: "", stderr: "" }))

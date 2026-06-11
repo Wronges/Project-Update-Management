@@ -15,6 +15,7 @@ type DockerClient = Pick<
   | "runtimeStatus"
   | "containerImageId"
   | "taggedImageId"
+  | "imageInfo"
   | "pull"
   | "recreate"
   | "rollback"
@@ -310,6 +311,10 @@ export class ProjectService {
         ? this.docker.taggedImageId(project.image)
         : Promise.resolve(latestOverride)
     ]);
+    const [runningImageInfo, latestImageInfo] = await Promise.all([
+      runningImageId ? this.docker.imageInfo(runningImageId) : null,
+      localImageId ? this.docker.imageInfo(localImageId) : null
+    ]);
     const lastTask = this.tasks.latestForProject(project.id);
     const lastSuccessfulUpdate =
       this.tasks.latestSuccessfulUpdateForProject(project.id);
@@ -325,6 +330,10 @@ export class ProjectService {
             : "unknown",
       runningImageId,
       latestImageId: localImageId,
+      runningVersion: runningImageInfo?.version ?? null,
+      latestVersion: latestImageInfo?.version ?? null,
+      runningImageCreatedAt: runningImageInfo?.createdAt ?? null,
+      latestImageCreatedAt: latestImageInfo?.createdAt ?? null,
       lastCheckedAt: lastTask?.finishedAt ?? null,
       lastUpdatedAt: lastSuccessfulUpdate?.finishedAt ?? null
     });
@@ -348,6 +357,10 @@ export class ProjectService {
         updateStatus: "unknown",
         runningImageId: null,
         latestImageId: null,
+        runningVersion: null,
+        latestVersion: null,
+        runningImageCreatedAt: null,
+        latestImageCreatedAt: null,
         lastCheckedAt: null,
         lastUpdatedAt: null
       }

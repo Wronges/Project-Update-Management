@@ -40,8 +40,32 @@ export interface ProjectStatus extends ProjectDefinition {
   updateStatus: UpdateStatus;
   runningImageId: string | null;
   latestImageId: string | null;
+  runningVersion: string | null;
+  latestVersion: string | null;
+  runningImageCreatedAt: string | null;
+  latestImageCreatedAt: string | null;
   lastCheckedAt: string | null;
   lastUpdatedAt: string | null;
+}
+
+export interface ProjectRelease {
+  tagName: string;
+  name: string;
+  publishedAt: string | null;
+  htmlUrl: string;
+  body: string;
+  isNewerThanCurrent: boolean | null;
+}
+
+export interface ProjectReleasesPayload {
+  repository: string;
+  source: "github" | "none";
+  currentVersion: string | null;
+  latestLocalVersion: string | null;
+  releases: ProjectRelease[];
+  fetchedAt: string;
+  stale?: boolean;
+  error?: string;
 }
 
 export interface UpdateTask {
