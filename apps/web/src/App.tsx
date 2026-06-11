@@ -51,6 +51,8 @@ export function App() {
   const [onlyUpdates, setOnlyUpdates] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionIds, setActionIds] = useState<Set<string>>(() => new Set());
+  const [pruning, setPruning] = useState(false);
+  const [pruneMessage, setPruneMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadDashboard = useEffectEvent(async () => {
@@ -155,33 +157,42 @@ export function App() {
     projectId: string,
     action: "check" | "update"
   ): Promise<UpdateTask | null> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      let token = window.sessionStorage.getItem("pum-admin-token") ?? "";
-      if (!token) {
-        token = window.prompt("请输入管理员令牌")?.trim() ?? "";
-        if (!token) return null;
-        window.sessionStorage.setItem("pum-admin-token", token);
-      }
-
-      const response = await fetch(`/api/projects/${projectId}/${action}`, {
+    const response = await authorizedFetch(
+      `/api/projects/${projectId}/${action}`,
+      {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-pum-token": token
-        },
+        headers: { "content-type": "application/json" },
+        body: "{}"
+      }
+    );
+    if (!response) return null;
+    if (!response.ok) {
+      const payload = await response.json();
+      throw new Error(payload.error ?? "任务创建失败");
+    }
+    return response.json();
+  }
+
+  async function pruneImages(): Promise<void> {
+    if (!window.confirm("确定清理宿主机上的全部悬空镜像吗？")) return;
+    setPruning(true);
+    setPruneMessage(null);
+    try {
+      const response = await authorizedFetch("/api/server/prune", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
         body: "{}"
       });
-      if (response.status === 401) {
-        window.sessionStorage.removeItem("pum-admin-token");
-        if (attempt === 0) continue;
-      }
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload.error ?? "任务创建失败");
-      }
-      return response.json();
+      if (!response) return;
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "清理镜像失败");
+      setPruneMessage(`已回收 ${formatBytes(payload.reclaimedBytes ?? 0)}`);
+      await loadServerStatus();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPruning(false);
     }
-    throw new Error("管理员令牌无效");
   }
 
   async function waitForTask(taskId: string): Promise<void> {
@@ -402,7 +413,12 @@ export function App() {
         </section>
           </>
         ) : serverStatus ? (
-          <ServerStatusView status={serverStatus} />
+          <ServerStatusView
+            status={serverStatus}
+            pruning={pruning}
+            pruneMessage={pruneMessage}
+            onPrune={() => void pruneImages()}
+          />
         ) : (
           <div className="empty-state">正在读取服务器状态...</div>
         )}
@@ -490,7 +506,17 @@ function NavItem({
   );
 }
 
-function ServerStatusView({ status }: { status: ServerStatusPayload }) {
+function ServerStatusView({
+  status,
+  pruning,
+  pruneMessage,
+  onPrune
+}: {
+  status: ServerStatusPayload;
+  pruning: boolean;
+  pruneMessage: string | null;
+  onPrune: () => void;
+}) {
   return (
     <div className="server-status-page">
       <section className="server-hero">
@@ -539,6 +565,41 @@ function ServerStatusView({ status }: { status: ServerStatusPayload }) {
               : 0
           }
         />
+      </section>
+
+      <section className="panel docker-disk-panel">
+        <div className="docker-disk-header">
+          <div>
+            <h2>Docker 磁盘占用</h2>
+            <span>镜像清理仅删除无标签且未被容器引用的悬空镜像</span>
+          </div>
+          <div className="docker-disk-action">
+            {pruneMessage && <strong>{pruneMessage}</strong>}
+            <button
+              className="button secondary"
+              disabled={pruning}
+              onClick={onPrune}
+            >
+              <HardDrive size={15} />
+              {pruning ? "正在清理" : "清理悬空镜像"}
+            </button>
+          </div>
+        </div>
+        {status.dockerDisk ? (
+          <div className="docker-disk-grid">
+            {status.dockerDisk.map((item) => (
+              <article key={item.type}>
+                <span>{dockerDiskLabel(item.type)}</span>
+                <strong>{formatBytes(item.sizeBytes)}</strong>
+                <small>
+                  可回收 {formatBytes(item.reclaimableBytes)} · {item.active}/{item.totalCount} 活跃
+                </small>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="docker-disk-unavailable">Docker 磁盘统计暂不可用</div>
+        )}
       </section>
 
       <section className="panel server-containers">
@@ -824,6 +885,36 @@ function ReleaseNotesPanel({ project }: { project: ProjectStatus }) {
 function shortId(value: string | null): string {
   if (!value) return "—";
   return value.replace("sha256:", "").slice(0, 12);
+}
+
+async function authorizedFetch(
+  path: string,
+  init: RequestInit
+): Promise<Response | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let token = window.sessionStorage.getItem("pum-admin-token") ?? "";
+    if (!token) {
+      token = window.prompt("请输入管理员令牌")?.trim() ?? "";
+      if (!token) return null;
+      window.sessionStorage.setItem("pum-admin-token", token);
+    }
+    const headers = new Headers(init.headers);
+    headers.set("x-pum-token", token);
+    const response = await fetch(path, { ...init, headers });
+    if (response.status !== 401) return response;
+    window.sessionStorage.removeItem("pum-admin-token");
+  }
+  throw new Error("管理员令牌无效");
+}
+
+function dockerDiskLabel(type: string): string {
+  const labels: Record<string, string> = {
+    Images: "镜像",
+    Containers: "容器",
+    "Local Volumes": "本地卷",
+    "Build Cache": "构建缓存"
+  };
+  return labels[type] ?? type;
 }
 
 function imageTitle(imageId: string | null, createdAt: string | null): string {

@@ -12,6 +12,11 @@ function checkIntervalMinutes(value: string | undefined): number {
   return Math.max(parsed, 30);
 }
 
+function nonNegativeNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export const appConfig = {
   host: process.env.PUM_HOST ?? "127.0.0.1",
   port: Number(process.env.PUM_PORT ?? 8787),
@@ -25,5 +30,6 @@ export const appConfig = {
   rollbackOnFailure: process.env.PUM_ROLLBACK_ON_FAILURE !== "false",
   checkIntervalMinutes: checkIntervalMinutes(
     process.env.PUM_CHECK_INTERVAL_MINUTES
-  )
+  ),
+  minFreeDiskGb: nonNegativeNumber(process.env.PUM_MIN_FREE_DISK_GB, 2)
 };

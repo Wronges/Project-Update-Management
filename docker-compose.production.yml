@@ -16,6 +16,7 @@ services:
       PUM_TIME_ZONE: ${PUM_TIME_ZONE:-Asia/Shanghai}
       PUM_ROLLBACK_ON_FAILURE: ${PUM_ROLLBACK_ON_FAILURE:-true}
       PUM_CHECK_INTERVAL_MINUTES: ${PUM_CHECK_INTERVAL_MINUTES:-60}
+      PUM_MIN_FREE_DISK_GB: ${PUM_MIN_FREE_DISK_GB:-2}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt:/opt:ro

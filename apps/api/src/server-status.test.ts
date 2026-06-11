@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseContainerRows, parseJsonLines } from "./server-status.js";
+import {
+  parseContainerRows,
+  parseDockerSize,
+  parseJsonLines
+} from "./server-status.js";
 
 describe("server status parsing", () => {
   it("merges docker process and resource rows", () => {
@@ -24,5 +28,15 @@ describe("server status parsing", () => {
         pids: 12
       }
     ]);
+  });
+
+  it.each([
+    ["5.265GB (32%)", 5_265_000_000],
+    ["0B", 0],
+    ["1.5kB", 1500],
+    ["716.5MiB", Math.round(716.5 * 1024 ** 2)],
+    ["invalid", 0]
+  ])("parses Docker size %s", (value, expected) => {
+    expect(parseDockerSize(value)).toBe(expected);
   });
 });

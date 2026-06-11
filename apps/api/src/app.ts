@@ -28,10 +28,12 @@ export async function buildApp() {
 
   const inventory = await loadInventory(appConfig.inventoryPath);
   const tasks = new TaskDatabase(appConfig.databasePath);
-  const projects = new ProjectService(inventory, new DockerAdapter(), tasks, {
+  const docker = new DockerAdapter();
+  const projects = new ProjectService(inventory, docker, tasks, {
     healthHostAlias: appConfig.healthHostAlias,
     timeZone: appConfig.timeZone,
-    rollbackOnFailure: appConfig.rollbackOnFailure
+    rollbackOnFailure: appConfig.rollbackOnFailure,
+    minFreeDiskGb: appConfig.minFreeDiskGb
   });
   await projects.initialize();
   const releaseNotes = new ReleaseNotesService({
@@ -39,7 +41,8 @@ export async function buildApp() {
   });
   const scheduler = new ProjectCheckScheduler(projects, tasks, {
     intervalMinutes: appConfig.checkIntervalMinutes,
-    logger: app.log
+    logger: app.log,
+    docker
   });
   scheduler.start();
   app.addHook("onClose", async () => {
@@ -72,6 +75,7 @@ export async function buildApp() {
     };
   });
   app.get("/api/server-status", async () => collectServerStatus());
+  registerServerPruneRoute(app, docker);
   app.get("/api/projects", async () => {
     await projects.refreshRuntimeStatuses();
     return projects.list();
@@ -132,6 +136,27 @@ export async function buildApp() {
   return app;
 }
 
+interface ImagePruner {
+  pruneImages(): Promise<{
+    reclaimedBytes: number;
+    stdout: string;
+    stderr: string;
+  }>;
+}
+
+export function registerServerPruneRoute(
+  app: FastifyInstance,
+  docker: ImagePruner
+): void {
+  app.post("/api/server/prune", async (_request, reply) => {
+    const result = await docker.pruneImages();
+    return reply.code(200).send({
+      reclaimedBytes: result.reclaimedBytes,
+      output: `${result.stdout}${result.stderr}`
+    });
+  });
+}
+
 interface ProjectReader {
   get(projectId: string): ProjectStatus;
 }
@@ -155,7 +180,10 @@ export function registerProjectReleaseRoute(
           ...result,
           currentVersion: project.runningVersion,
           latestLocalVersion: project.latestVersion,
-          releases: markNewerReleases(result.releases, project.runningVersion)
+          releases: markNewerReleases(
+            result.releases,
+            result.source === "github-tags" ? null : project.runningVersion
+          )
         };
       } catch (error) {
         return sendProjectError(reply, error);

@@ -6,6 +6,7 @@ import type {
   UpdateTask
 } from "@pum/shared";
 import { DockerAdapter } from "./docker.js";
+import { freeDiskBytes as readFreeDiskBytes } from "./disk.js";
 import { TaskDatabase } from "./database.js";
 import { ProjectConflictError, ProjectNotFoundError } from "./errors.js";
 
@@ -16,6 +17,7 @@ type DockerClient = Pick<
   | "containerImageId"
   | "taggedImageId"
   | "imageInfo"
+  | "tagRollbackImage"
   | "pull"
   | "recreate"
   | "rollback"
@@ -37,6 +39,8 @@ interface ProjectServiceOptions {
   fetcher?: typeof fetch;
   wait?: (milliseconds: number) => Promise<void>;
   now?: () => Date;
+  minFreeDiskGb?: number;
+  freeDiskBytes?: () => number;
 }
 
 export class ProjectService {
@@ -48,6 +52,8 @@ export class ProjectService {
   private readonly fetcher: typeof fetch;
   private readonly wait: (milliseconds: number) => Promise<void>;
   private readonly now: () => Date;
+  private readonly minFreeDiskBytes: number;
+  private readonly freeDiskBytes: () => number;
   private runtimeRefreshPromise: Promise<void> | null = null;
   private runtimeRefreshedAt = 0;
 
@@ -63,6 +69,8 @@ export class ProjectService {
     this.fetcher = options.fetcher ?? fetch;
     this.wait = options.wait ?? wait;
     this.now = options.now ?? (() => new Date());
+    this.minFreeDiskBytes = Math.max(options.minFreeDiskGb ?? 2, 0) * 1000 ** 3;
+    this.freeDiskBytes = options.freeDiskBytes ?? readFreeDiskBytes;
   }
 
   async initialize(): Promise<void> {
@@ -202,12 +210,19 @@ export class ProjectService {
         return;
       }
 
+      this.assertSufficientDiskSpace();
       const pull = await this.docker.pull(project);
       appendLog(task, "pull", pull.stdout, pull.stderr);
       task.nextImageId = await this.docker.taggedImageId(project.image);
       this.tasks.update(task);
 
       if (task.kind === "update") {
+        if (
+          task.previousImageId &&
+          task.previousImageId !== task.nextImageId
+        ) {
+          await this.tryTagRollbackImage(project, task);
+        }
         deploymentStarted = true;
         const recreate = await this.docker.recreate(project);
         appendLog(task, "recreate", recreate.stdout, recreate.stderr);
@@ -253,6 +268,33 @@ export class ProjectService {
         this.locks.delete(project.id);
       }
     }
+  }
+
+  private async tryTagRollbackImage(
+    project: ProjectDefinition,
+    task: UpdateTask
+  ): Promise<void> {
+    try {
+      const result = await this.docker.tagRollbackImage(
+        project,
+        task.previousImageId as string
+      );
+      appendLog(task, "rollback-tag", result.stdout, result.stderr);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      task.log += `\n[rollback-tag-warning]\n${message}\n`;
+    }
+    this.tasks.update(task);
+  }
+
+  private assertSufficientDiskSpace(): void {
+    if (this.minFreeDiskBytes <= 0) return;
+    const available = this.freeDiskBytes();
+    if (available >= this.minFreeDiskBytes) return;
+    throw new Error(
+      `insufficient disk space: ${formatGigabytes(available)} GB free, ` +
+        `${formatGigabytes(this.minFreeDiskBytes)} GB required`
+    );
   }
 
   private async tryRollback(
@@ -387,6 +429,10 @@ function appendLog(
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function formatGigabytes(bytes: number): string {
+  return (bytes / 1000 ** 3).toFixed(1).replace(/\.0$/, "");
 }
 
 function rewriteHealthHost(url: string, alias: string): string {

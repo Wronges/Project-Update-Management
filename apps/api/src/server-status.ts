@@ -7,6 +7,7 @@ import type {
   ServerResourceUsage,
   ServerStatusPayload
 } from "@pum/shared";
+import { parseDockerSize } from "./disk.js";
 
 const execFileAsync = promisify(execFile);
 const maxBuffer = 10 * 1024 * 1024;
@@ -34,6 +35,14 @@ interface DockerPsRow {
   Status?: string;
 }
 
+interface DockerDiskRow {
+  Type?: string;
+  TotalCount?: string;
+  Active?: string;
+  Size?: string;
+  Reclaimable?: string;
+}
+
 export async function collectServerStatus(): Promise<ServerStatusPayload> {
   const now = Date.now();
   if (cachedStatus && now - cachedAt < cacheTtlMs) return cachedStatus;
@@ -49,9 +58,10 @@ export async function collectServerStatus(): Promise<ServerStatusPayload> {
 }
 
 async function collectServerStatusOnce(): Promise<ServerStatusPayload> {
-  const [statsResult, psResult] = await Promise.all([
+  const [statsResult, psResult, diskResult] = await Promise.all([
     runDocker(["stats", "--all", "--no-stream", "--format", "{{json .}}"]),
-    runDocker(["ps", "-a", "--no-trunc", "--format", "{{json .}}"])
+    runDocker(["ps", "-a", "--no-trunc", "--format", "{{json .}}"]),
+    runDocker(["system", "df", "--format", "{{json .}}"]).catch(() => null)
   ]);
   const stats = parseJsonLines<DockerStatsRow>(statsResult.stdout);
   const containers = parseContainerRows(stats, parseJsonLines<DockerPsRow>(psResult.stdout));
@@ -70,6 +80,15 @@ async function collectServerStatusOnce(): Promise<ServerStatusPayload> {
     loadPercent: roundPercent((loadAverage[0] / cpuCount) * 100),
     memory: resourceUsage(totalMemory, freeMemory),
     disk: diskUsage("/"),
+    dockerDisk: diskResult
+      ? parseJsonLines<DockerDiskRow>(diskResult.stdout).map((row) => ({
+          type: row.Type ?? "Unknown",
+          totalCount: Number(row.TotalCount ?? 0),
+          active: Number(row.Active ?? 0),
+          sizeBytes: parseDockerSize(row.Size ?? ""),
+          reclaimableBytes: parseDockerSize(row.Reclaimable ?? "")
+        }))
+      : null,
     containers: {
       total: containers.length,
       running: containers.filter((container) => container.state === "running").length,
@@ -78,6 +97,8 @@ async function collectServerStatusOnce(): Promise<ServerStatusPayload> {
     }
   };
 }
+
+export { parseDockerSize } from "./disk.js";
 
 export function parseContainerRows(
   stats: DockerStatsRow[],

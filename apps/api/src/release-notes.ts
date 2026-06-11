@@ -4,6 +4,7 @@ import type {
 } from "@pum/shared";
 
 const defaultTtlMs = 30 * 60_000;
+const failureTtlMs = 2 * 60_000;
 const maxBodyLength = 4000;
 
 interface GitHubRepository {
@@ -83,11 +84,11 @@ export class ReleaseNotesService {
     cached: CachedReleaseNotes | undefined
   ): Promise<ReleaseNotesResult> {
     try {
-      const releases = await this.fetchReleases(repository);
+      const fetched = await this.fetchReleases(repository);
       const value: ReleaseNotesResult = {
         repository: repository.url,
-        source: "github",
-        releases,
+        source: fetched.source,
+        releases: fetched.releases,
         fetchedAt: new Date(this.now()).toISOString()
       };
       this.cache.set(repository.url, {
@@ -97,22 +98,29 @@ export class ReleaseNotesService {
       return value;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (cached) {
-        return { ...cached.value, stale: true, error: message };
-      }
-      return {
-        repository: repository.url,
-        source: "github",
-        releases: [],
-        fetchedAt: new Date(this.now()).toISOString(),
-        error: message
-      };
+      const value: ReleaseNotesResult = cached
+        ? { ...cached.value, stale: true, error: message }
+        : {
+            repository: repository.url,
+            source: "github",
+            releases: [],
+            fetchedAt: new Date(this.now()).toISOString(),
+            error: message
+          };
+      this.cache.set(repository.url, {
+        value,
+        expiresAt: this.now() + failureTtlMs
+      });
+      return value;
     }
   }
 
   private async fetchReleases(
     repository: GitHubRepository
-  ): Promise<RawProjectRelease[]> {
+  ): Promise<{
+    source: "github" | "github-tags";
+    releases: RawProjectRelease[];
+  }> {
     const baseUrl = `https://api.github.com/repos/${repository.owner}/${repository.repo}`;
     const response = await this.request(`${baseUrl}/releases?per_page=15`);
     const payload = (await response.json()) as unknown;
@@ -127,15 +135,17 @@ export class ReleaseNotesService {
         tagName: stringValue(release.tag_name),
         name: stringValue(release.name) || stringValue(release.tag_name),
         publishedAt: nullableString(release.published_at),
-        htmlUrl: stringValue(release.html_url),
+        htmlUrl: stringValue(release.html_url) || `${repository.url}/releases`,
         body: stringValue(release.body).slice(0, maxBodyLength)
       }));
-    if (releases.length) return releases;
+    if (releases.length) return { source: "github", releases };
 
     const tagsResponse = await this.request(`${baseUrl}/tags?per_page=10`);
     const tags = (await tagsResponse.json()) as unknown;
     if (!Array.isArray(tags)) throw new Error("GitHub tags response is invalid");
-    return tags
+    return {
+      source: "github-tags",
+      releases: tags
       .map((tag) => {
         if (!tag || typeof tag !== "object") return null;
         const tagName = stringValue((tag as Record<string, unknown>).name);
@@ -148,7 +158,8 @@ export class ReleaseNotesService {
           body: ""
         };
       })
-      .filter((tag): tag is NonNullable<typeof tag> => tag !== null);
+      .filter((tag): tag is NonNullable<typeof tag> => tag !== null)
+    };
   }
 
   private request(url: string): Promise<Response> {

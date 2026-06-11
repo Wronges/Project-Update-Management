@@ -90,6 +90,56 @@ describe("ReleaseNotesService", () => {
     expect(stale.stale).toBe(true);
     expect(stale.error).toBe("network unavailable");
     expect(stale.releases).toEqual(first.releases);
+
+    await service.get("https://github.com/owner/repo");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a two-minute negative cache after an initial failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new Error("network unavailable"));
+    const service = new ReleaseNotesService({ fetcher });
+
+    await service.get("https://github.com/owner/repo");
+    await service.get("https://github.com/owner/repo");
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to tags and marks the result source", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json([]))
+      .mockResolvedValueOnce(Response.json([{ name: "v2.0.0" }]));
+    const service = new ReleaseNotesService({ fetcher });
+
+    const result = await service.get("https://github.com/owner/repo");
+
+    expect(result.source).toBe("github-tags");
+    expect(result.releases[0]?.tagName).toBe("v2.0.0");
+  });
+
+  it("falls back to the repository releases page when html_url is missing", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json([
+        {
+          tag_name: "v1.0.0",
+          name: "v1.0.0",
+          published_at: "2026-06-10T00:00:00Z",
+          body: "",
+          draft: false,
+          prerelease: false
+        }
+      ])
+    );
+    const service = new ReleaseNotesService({ fetcher });
+
+    const result = await service.get("https://github.com/owner/repo");
+
+    expect(result.releases[0]?.htmlUrl).toBe(
+      "https://github.com/owner/repo/releases"
+    );
   });
 });
 

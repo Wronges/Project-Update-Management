@@ -6,12 +6,14 @@ describe("ProjectCheckScheduler", () => {
   it("runs scheduled checks for every project in sequence", async () => {
     const projects = createProjects(["one", "two"]);
     const tasks = { prune: vi.fn(() => 3) };
+    const docker = createDocker();
     const waits: number[] = [];
     const scheduler = new ProjectCheckScheduler(projects, tasks, {
       intervalMinutes: 30,
       wait: createTestWait(waits),
       now: () => new Date("2026-06-10T00:00:00.000Z"),
-      logger: silentLogger
+      logger: silentLogger,
+      docker
     });
 
     scheduler.start();
@@ -27,6 +29,7 @@ describe("ProjectCheckScheduler", () => {
     expect(tasks.prune).toHaveBeenCalledWith(
       new Date("2026-05-11T00:00:00.000Z")
     );
+    expect(docker.pruneImages).toHaveBeenCalledTimes(1);
   });
 
   it("skips projects that already have an active task", async () => {
@@ -38,7 +41,8 @@ describe("ProjectCheckScheduler", () => {
       {
         intervalMinutes: 30,
         wait: createTestWait([]),
-        logger: silentLogger
+        logger: silentLogger,
+        docker: createDocker()
       }
     );
 
@@ -51,6 +55,50 @@ describe("ProjectCheckScheduler", () => {
       "check",
       "scheduled"
     );
+  });
+
+  it("prunes images at most once every seven days", async () => {
+    let now = new Date("2026-06-01T00:00:00Z");
+    const docker = createDocker();
+    const scheduler = new ProjectCheckScheduler(
+      createProjects([]),
+      { prune: vi.fn(() => 0) },
+      {
+        intervalMinutes: 60,
+        wait: async () => undefined,
+        now: () => now,
+        logger: silentLogger,
+        docker
+      }
+    );
+    const runRound = scheduler as unknown as { runRound(): Promise<void> };
+
+    await runRound.runRound();
+    await runRound.runRound();
+    expect(docker.pruneImages).toHaveBeenCalledTimes(1);
+
+    now = new Date("2026-06-08T00:00:01Z");
+    await runRound.runRound();
+    expect(docker.pruneImages).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips image prune while any project is locked", async () => {
+    const projects = createProjects(["locked"]);
+    projects.isLocked.mockReturnValue(true);
+    const docker = createDocker();
+    const scheduler = new ProjectCheckScheduler(
+      projects,
+      { prune: vi.fn(() => 0) },
+      {
+        intervalMinutes: 60,
+        wait: async () => undefined,
+        logger: silentLogger,
+        docker
+      }
+    );
+
+    await (scheduler as unknown as { runRound(): Promise<void> }).runRound();
+    expect(docker.pruneImages).not.toHaveBeenCalled();
   });
 });
 
@@ -73,6 +121,16 @@ function createProjects(ids: string[]) {
     ),
     isLocked: vi.fn((_projectId: string) => false),
     createTask: vi.fn((projectId: string) => createCompletedTask(projectId))
+  };
+}
+
+function createDocker() {
+  return {
+    pruneImages: vi.fn(async () => ({
+      reclaimedBytes: 123,
+      stdout: "",
+      stderr: ""
+    }))
   };
 }
 

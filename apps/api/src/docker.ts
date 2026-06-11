@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ProjectDefinition, RuntimeStatus } from "@pum/shared";
+import { parseDockerSize } from "./disk.js";
 
 const execFileAsync = promisify(execFile);
 const maxBuffer = 10 * 1024 * 1024;
@@ -22,6 +23,10 @@ export interface ImageInfo {
   createdAt: string;
   version: string | null;
   revision: string | null;
+}
+
+export interface PruneResult extends CommandResult {
+  reclaimedBytes: number;
 }
 
 export class DockerAdapter {
@@ -144,6 +149,31 @@ export class DockerAdapter {
     );
   }
 
+  tagRollbackImage(
+    project: ProjectDefinition,
+    imageId: string
+  ): Promise<CommandResult> {
+    return this.run("docker", [
+      "image",
+      "tag",
+      imageId,
+      `pum-rollback/${project.id}:latest`
+    ]);
+  }
+
+  async pruneImages(): Promise<PruneResult> {
+    const result = await this.run(
+      "docker",
+      ["image", "prune", "-f"],
+      undefined,
+      composeTimeoutMs
+    );
+    return {
+      ...result,
+      reclaimedBytes: parsePruneReclaimedBytes(result.stdout)
+    };
+  }
+
   async rollback(
     project: ProjectDefinition,
     previousImageId: string
@@ -193,6 +223,11 @@ export class DockerAdapter {
       stderr: result.stderr
     };
   }
+}
+
+export function parsePruneReclaimedBytes(output: string): number {
+  const match = output.match(/Total reclaimed space:\s*(.+)$/im);
+  return match ? parseDockerSize(match[1]) : 0;
 }
 
 export function parseImageInfoOutput(output: string): ImageInfo | null {

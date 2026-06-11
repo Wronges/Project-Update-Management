@@ -2,23 +2,27 @@ import type { UpdateTask } from "@pum/shared";
 import { ProjectConflictError } from "./errors.js";
 import { ProjectService } from "./project-service.js";
 import { TaskDatabase } from "./database.js";
+import { DockerAdapter } from "./docker.js";
 
 const initialDelayMs = 60_000;
 const projectDelayMs = 10_000;
 const taskPollMs = 1_000;
 const retentionMs = 30 * 24 * 60 * 60_000;
+const imagePruneIntervalMs = 7 * 24 * 60 * 60_000;
 
 type ProjectSchedulerService = Pick<
   ProjectService,
   "list" | "isLocked" | "createTask"
 >;
 type SchedulerTaskStore = Pick<TaskDatabase, "prune">;
+type SchedulerDocker = Pick<DockerAdapter, "pruneImages">;
 
 interface SchedulerOptions {
   intervalMinutes: number;
   wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   now?: () => Date;
   logger?: Pick<Console, "info" | "warn" | "error">;
+  docker: SchedulerDocker;
 }
 
 export class ProjectCheckScheduler {
@@ -30,6 +34,7 @@ export class ProjectCheckScheduler {
   private readonly now: () => Date;
   private readonly logger: Pick<Console, "info" | "warn" | "error">;
   private runPromise: Promise<void> | null = null;
+  private lastImagePruneAt: number | null = null;
 
   constructor(
     private readonly projects: ProjectSchedulerService,
@@ -89,7 +94,31 @@ export class ProjectCheckScheduler {
 
     const cutoff = new Date(this.now().getTime() - retentionMs);
     const deleted = this.tasks.prune(cutoff);
+    await this.pruneImagesIfDue();
     this.logger.info(`Scheduled project check round finished; pruned ${deleted} tasks`);
+  }
+
+  private async pruneImagesIfDue(): Promise<void> {
+    const now = this.now().getTime();
+    if (
+      this.lastImagePruneAt !== null &&
+      now - this.lastImagePruneAt < imagePruneIntervalMs
+    ) {
+      return;
+    }
+    if (this.projects.list().some((project) => this.projects.isLocked(project.id))) {
+      this.logger.info("Scheduled image prune skipped because a project is locked");
+      return;
+    }
+    try {
+      const result = await this.options.docker.pruneImages();
+      this.lastImagePruneAt = now;
+      this.logger.info(
+        `Scheduled image prune completed; reclaimed ${result.reclaimedBytes} bytes`
+      );
+    } catch (error) {
+      this.logger.warn("Scheduled image prune failed", error);
+    }
   }
 
   private async waitForTask(task: UpdateTask): Promise<void> {

@@ -193,6 +193,78 @@ describe("ProjectService", () => {
     await service.refreshRuntimeStatuses();
     expect(docker.runtimeSnapshots).toHaveBeenCalledTimes(2);
   });
+
+  it("tags the rollback image after pull and before recreate", async () => {
+    const docker = createDocker();
+    docker.taggedImageId
+      .mockResolvedValueOnce("sha256:previous")
+      .mockResolvedValueOnce("sha256:next");
+    docker.containerImageId.mockResolvedValue("sha256:previous");
+    const project = { ...imageProject, healthUrl: undefined };
+    const service = new ProjectService([project], docker, createTaskStore(), {
+      freeDiskBytes: () => 10 * 1000 ** 3,
+      wait: async () => undefined
+    });
+    await service.initialize();
+
+    const task = service.createTask(project.id, "update");
+    await waitFor(() => task.status === "succeeded");
+
+    expect(docker.pull.mock.invocationCallOrder[0]).toBeLessThan(
+      docker.tagRollbackImage.mock.invocationCallOrder[0]
+    );
+    expect(docker.tagRollbackImage.mock.invocationCallOrder[0]).toBeLessThan(
+      docker.recreate.mock.invocationCallOrder[0]
+    );
+    expect(docker.tagRollbackImage).toHaveBeenCalledWith(
+      project,
+      "sha256:previous"
+    );
+    expect(task.log).toContain("[rollback-tag]");
+  });
+
+  it("continues an update when rollback image tagging fails", async () => {
+    const docker = createDocker();
+    docker.taggedImageId
+      .mockResolvedValueOnce("sha256:previous")
+      .mockResolvedValueOnce("sha256:next");
+    docker.containerImageId.mockResolvedValue("sha256:previous");
+    docker.tagRollbackImage.mockRejectedValue(new Error("tag failed"));
+    const project = { ...imageProject, healthUrl: undefined };
+    const service = new ProjectService([project], docker, createTaskStore(), {
+      freeDiskBytes: () => 10 * 1000 ** 3,
+      wait: async () => undefined
+    });
+    await service.initialize();
+
+    const task = service.createTask(project.id, "update");
+    await waitFor(() => task.status === "succeeded");
+
+    expect(docker.recreate).toHaveBeenCalled();
+    expect(task.log).toContain("[rollback-tag-warning]");
+  });
+
+  it("fails before pull when free disk space is below the configured minimum", async () => {
+    const docker = createDocker();
+    const service = new ProjectService(
+      [imageProject],
+      docker,
+      createTaskStore(),
+      {
+        minFreeDiskGb: 2,
+        freeDiskBytes: () => 1.4 * 1000 ** 3
+      }
+    );
+    await service.initialize();
+
+    const task = service.createTask(imageProject.id, "check");
+    await waitFor(() => task.status === "failed");
+
+    expect(task.error).toBe(
+      "insufficient disk space: 1.4 GB free, 2 GB required"
+    );
+    expect(docker.pull).not.toHaveBeenCalled();
+  });
 });
 
 function createDocker() {
@@ -213,6 +285,7 @@ function createDocker() {
       version: "1.0.0",
       revision: null
     })),
+    tagRollbackImage: vi.fn(async () => ({ stdout: "tagged", stderr: "" })),
     pull: vi.fn(async () => ({ stdout: "", stderr: "" })),
     recreate: vi.fn(async () => ({ stdout: "", stderr: "" })),
     rollback: vi.fn(async () => ({ stdout: "", stderr: "" }))

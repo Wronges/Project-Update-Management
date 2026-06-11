@@ -49,6 +49,8 @@ docker compose -f docker-compose.production.yml up -d --build
 
 后台默认每 60 分钟依次执行一次项目检查，可通过 `PUM_CHECK_INTERVAL_MINUTES` 调整，设为 `0` 禁用。为避免 Docker Hub 匿名拉取限流，非零间隔最低按 30 分钟执行。任务记录保留 30 天并在每轮调度后自动清理。
 
+更新任务在重建容器前会把上一版镜像保护为 `pum-rollback/<项目id>:latest`，每个项目滚动保留一版回滚目标。后台每七天清理一次宿主机悬空镜像；服务器状态页也提供手动清理入口。`PUM_MIN_FREE_DISK_GB` 默认是 `2`，实际拉取镜像前若根磁盘可用空间不足，检查或更新任务会直接失败；设为 `0` 可关闭此保护。
+
 项目详情按需读取 GitHub Releases，并缓存 30 分钟。未配置 `PUM_GITHUB_TOKEN` 时使用 GitHub 匿名 API（通常为每个出口 IP 每小时 60 次）；配置只读 token 可提高限额和稳定性。GitHub 不可达或触发限流时只会降级更新说明，不影响项目状态检查和更新流程。
 
 公网接入示例位于 `deploy/nginx/`。管理页面应至少启用 HTTPS 和 Basic Auth，应用层写操作仍由 `PUM_ADMIN_TOKEN` 二次保护。

@@ -59,7 +59,7 @@ export interface ProjectRelease {
 
 export interface ProjectReleasesPayload {
   repository: string;
-  source: "github" | "none";
+  source: "github" | "github-tags" | "none";
   currentVersion: string | null;
   latestLocalVersion: string | null;
   releases: ProjectRelease[];
@@ -121,6 +121,13 @@ export interface ServerStatusPayload {
   loadPercent: number;
   memory: ServerResourceUsage;
   disk: ServerResourceUsage;
+  dockerDisk: Array<{
+    type: string;
+    totalCount: number;
+    active: number;
+    sizeBytes: number;
+    reclaimableBytes: number;
+  }> | null;
   containers: {
     total: number;
     running: number;

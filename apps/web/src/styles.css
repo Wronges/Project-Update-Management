@@ -330,6 +330,18 @@ th, td { padding: 13px 12px; border-bottom: 1px solid #eef1f5; white-space: nowr
 .metric-track { height: 5px; overflow: hidden; border-radius: 99px; background: #edf1f4; }
 .metric-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #1a827a, #3cc69d); }
 .server-containers { overflow: hidden; }
+.docker-disk-panel { padding: 16px; }
+.docker-disk-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.docker-disk-header h2 { margin: 0; font-size: 15px; }
+.docker-disk-header span { display: block; margin-top: 4px; color: #8d97a8; font-size: 11px; }
+.docker-disk-action { display: flex; align-items: center; gap: 12px; }
+.docker-disk-action strong { color: #16865e; font-size: 11px; font-weight: 500; }
+.docker-disk-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-top: 14px; }
+.docker-disk-grid article { padding: 12px; border: 1px solid #e6eaf0; border-radius: 7px; background: #fafbfd; }
+.docker-disk-grid span { display: block; color: #758094; font-size: 11px; }
+.docker-disk-grid strong { display: block; margin: 4px 0 3px; color: #203047; font: 500 16px "IBM Plex Mono", monospace; }
+.docker-disk-grid small { color: #929bad; font-size: 10px; }
+.docker-disk-unavailable { margin-top: 14px; padding: 18px; color: #929bad; text-align: center; background: #f7f8fa; border-radius: 7px; font-size: 11px; }
 .server-containers tbody tr:last-child td { border-bottom: 0; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -340,4 +352,5 @@ th, td { padding: 13px 12px; border-bottom: 1px solid #eef1f5; white-space: nowr
   .topbar p { display: none; }
   .search { width: 190px; }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .docker-disk-grid { grid-template-columns: repeat(2, 1fr); }
 }

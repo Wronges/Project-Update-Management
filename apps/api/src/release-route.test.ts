@@ -104,4 +104,37 @@ describe("GET /api/projects/:id/releases", () => {
     expect(response.statusCode).toBe(404);
     await app.close();
   });
+
+  it("does not mark unordered tag fallback entries as newer", async () => {
+    const app = Fastify();
+    registerProjectReleaseRoute(
+      app,
+      { get: () => project },
+      {
+        async get() {
+          return {
+            repository: project.repository,
+            source: "github-tags",
+            releases: [
+              {
+                tagName: "v1.1.0",
+                name: "v1.1.0",
+                publishedAt: null,
+                htmlUrl: project.repository,
+                body: ""
+              }
+            ],
+            fetchedAt: "2026-06-11T00:00:00Z"
+          };
+        }
+      }
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/projects/demo/releases"
+    });
+    expect(response.json().releases[0].isNewerThanCurrent).toBeNull();
+    await app.close();
+  });
 });

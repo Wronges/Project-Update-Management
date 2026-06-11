@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseImageInfoOutput } from "./docker.js";
+import {
+  parseImageInfoOutput,
+  parsePruneReclaimedBytes
+} from "./docker.js";
 
 describe("parseImageInfoOutput", () => {
   it("parses OCI version and revision labels", () => {
@@ -24,5 +27,12 @@ describe("parseImageInfoOutput", () => {
       version: null,
       revision: null
     });
+  });
+
+  it("parses reclaimed bytes from Docker prune output", () => {
+    expect(
+      parsePruneReclaimedBytes("Total reclaimed space: 1.5MB\n")
+    ).toBe(1_500_000);
+    expect(parsePruneReclaimedBytes("Deleted Images:\n")).toBe(0);
   });
 });
